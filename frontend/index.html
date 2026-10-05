@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080b12">
+  <title>Mint AI · Compute ownership</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: "#080b12",
+            panel: "#101621",
+            line: "#202a39",
+            mint: "#76f7c5",
+            violet: "#a78bfa"
+          },
+          boxShadow: { glow: "0 0 32px rgba(118,247,197,.12)" }
+        }
+      }
+    };
+  </script>
+  <style>
+    :root { color-scheme: dark; }
+    * { -webkit-tap-highlight-color: transparent; }
+    body { background: radial-gradient(ellipse at 50% -20%, #172439 0, #080b12 54%); }
+    .glass { background: linear-gradient(145deg, rgba(20,29,42,.96), rgba(12,17,26,.96)); }
+    .ticker-track { animation: ticker 32s linear infinite; }
+    .ticker-track:hover { animation-play-state: paused; }
+    @keyframes ticker { to { transform: translateX(-50%); } }
+    .modal-wrap { opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+    .modal-panel { transform: translateX(36px); transition: transform .28s cubic-bezier(.2,.8,.2,1); }
+    .modal-wrap.open { opacity: 1; pointer-events: auto; }
+    .modal-wrap.open .modal-panel { transform: translateX(0); }
+    .route-view { animation: route-enter .28s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes route-enter { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
+    .safe-bottom { padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+    input, select { color-scheme: dark; }
+  </style>
+</head>
+<body class="min-h-screen text-slate-100 antialiased">
+  <div class="mx-auto max-w-6xl px-4 pb-12 pt-5 sm:px-6 lg:px-8">
+    <header class="mb-7 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-3" aria-label="Mint AI home">
+        <span class="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-lg font-black text-ink shadow-glow">M</span>
+        <span><span class="block text-sm font-bold tracking-[.16em]">MINT AI</span><span class="block text-[10px] uppercase tracking-[.18em] text-slate-500">Compute ownership</span></span>
+      </a>
+      <div class="flex items-center gap-2 rounded-full border border-line bg-panel/80 px-3 py-2 text-xs text-slate-300">
+        <span class="h-2 w-2 animate-pulse rounded-full bg-mint"></span>
+        <span id="network-status">Connecting</span>
+      </div>
+    </header>
+
+    <main id="dashboard-view">
+      <section class="mb-8">
+        <div class="mb-4 flex items-end justify-between gap-3">
+          <div><p class="mb-1 text-xs font-semibold uppercase tracking-[.2em] text-mint">Your portfolio</p><h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">Compute at work<span id="welcome-name" class="text-slate-400"></span></h1></div>
+          <span class="hidden rounded-full border border-violet/30 bg-violet/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-violet sm:inline-flex">Simulation</span>
+        </div>
+
+        <div class="grid gap-3 md:grid-cols-2">
+          <article class="glass rounded-3xl border border-line p-5 shadow-glow sm:p-6">
+            <div class="mb-5 flex items-start justify-between">
+              <div><p class="text-sm font-medium text-slate-300">🔒 Locked Wallet</p><p class="mt-1 text-xs text-slate-500">Server principal remains locked until 50 qualified referrals</p></div>
+              <span class="rounded-full bg-amber-300/10 px-2.5 py-1 text-[10px] font-semibold text-amber-200">LOCKED</span>
+            </div>
+            <div id="locked-balances" class="mb-4 min-h-10 space-y-1 text-xl font-semibold">—</div>
+            <div id="clearance-notices" class="space-y-2"></div>
+            <div id="ghost-dividends" class="mt-3 space-y-2"></div>
+          </article>
+
+          <article class="glass rounded-3xl border border-mint/25 p-5 shadow-glow sm:p-6">
+            <div class="mb-5 flex items-start justify-between">
+              <div><p class="text-sm font-medium text-slate-300">🔓 Withdrawable Wallet</p><p class="mt-1 text-xs text-slate-500">Available balances · by currency</p></div>
+              <span class="rounded-full bg-mint/10 px-2.5 py-1 text-[10px] font-semibold text-mint">LIQUID</span>
+            </div>
+            <div id="available-balances" class="mb-4 min-h-10 space-y-1 text-xl font-semibold">—</div>
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <select id="withdraw-currency" aria-label="Withdrawal currency" class="min-w-24 rounded-xl border border-line bg-ink px-3 py-2.5 text-sm outline-none focus:border-mint"></select>
+              <input id="withdraw-amount" type="number" min="0" step="any" placeholder="Amount" aria-label="Withdrawal amount" class="min-w-0 flex-1 rounded-xl border border-line bg-ink px-3 py-2.5 text-sm outline-none focus:border-mint">
+              <button id="withdraw-button" class="rounded-xl bg-mint px-4 py-2.5 text-sm font-bold text-ink transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40">Withdraw Payout</button>
+            </div>
+            <p id="withdraw-note" class="mt-2 text-[11px] text-slate-500">A 10% platform fee applies. Crypto withdrawals include a quoted network-fee deduction; unused fee estimates are returned.</p>
+            <form id="profile-form" class="mt-4 flex gap-2 border-t border-line pt-4">
+              <input id="wallet-address" type="text" minlength="10" maxlength="128" placeholder="TON or external payout wallet" aria-label="Payout wallet address" class="min-w-0 flex-1 rounded-xl border border-line bg-ink px-3 py-2.5 text-xs outline-none focus:border-mint">
+              <button class="rounded-xl border border-line px-3 py-2 text-xs font-semibold text-slate-300 transition hover:border-mint/50 hover:text-mint" type="submit">Save wallet</button>
+            </form>
+          </article>
+        </div>
+      </section>
+
+      <section class="mb-8 overflow-hidden rounded-2xl border border-line bg-panel/80">
+        <div class="flex items-center justify-between border-b border-line px-4 py-3">
+          <div class="flex items-center gap-2"><span class="text-base">⚡</span><h2 class="text-xs font-bold uppercase tracking-[.14em]">Network commission wheel</h2></div>
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Simulated live feed</span>
+        </div>
+        <div class="overflow-hidden py-3">
+          <div id="ticker-track" class="ticker-track flex w-max gap-10 whitespace-nowrap text-sm text-slate-300">
+            <span class="ticker-copy px-4">Connecting to live activity…</span><span aria-hidden="true" class="ticker-copy px-4">Connecting to live activity…</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="mb-8 grid gap-3 lg:grid-cols-[1.1fr_.9fr]">
+        <article class="glass rounded-3xl border border-line p-5 sm:p-6">
+          <div class="mb-4 flex items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold uppercase tracking-[.16em] text-violet">Your network</p><h2 class="mt-1 text-lg font-semibold">Build your circle. Earn upfront.</h2></div>
+            <span class="rounded-full border border-line px-2.5 py-1 text-[10px] font-semibold text-mint">30% REWARD</span>
+          </div>
+          <p class="mb-4 max-w-lg text-sm leading-6 text-slate-300">Share your link and earn <strong class="text-mint">30% of each referred friend’s first deposit</strong>. Invite more people who invest, and your one-time referral rewards grow with every new referral.</p>
+          <p class="mb-4 text-[11px] leading-5 text-slate-500">Earned once, when each referred investor makes their first deposit. Demo rewards are simulated.</p>
+          <div class="flex gap-2">
+            <input id="referral-link" readonly aria-label="Personal referral link" class="min-w-0 flex-1 rounded-xl border border-line bg-ink px-3 py-3 text-xs text-slate-300 outline-none">
+            <button id="copy-link" class="shrink-0 rounded-xl border border-mint/30 bg-mint/10 px-4 text-xs font-bold text-mint transition hover:bg-mint/20">Invite &amp; earn</button>
+          </div>
+          <p id="copy-status" class="mt-2 min-h-4 text-[11px] text-mint"></p>
+          <p id="referral-progress" class="mt-2 text-xs leading-5 text-slate-400"></p>
+        </article>
+
+        <article class="glass flex flex-col justify-between rounded-3xl border border-line p-5 sm:p-6">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[.16em] text-mint">Add a server slot</p>
+            <h2 class="mt-1 text-lg font-semibold">Choose your compute server to invest in</h2>
+            <p class="mt-2 max-w-md text-sm leading-6 text-slate-400">Preview the available H100 and A100 compute pools, then browse the catalog to compare configurations.</p>
+            <div class="mt-4 grid grid-cols-2 gap-2">
+              <button class="server-preview group relative h-24 overflow-hidden rounded-xl border border-line text-left transition hover:border-mint/50" data-server-preview="h100-node-01" aria-label="Preview HPE ML350 Gen 10 Server">
+                <img class="h-full w-full object-cover opacity-70 transition group-hover:scale-105 group-hover:opacity-90" src="/assets/hpe-ml350-gen10.png" alt="" loading="lazy">
+                <span class="absolute inset-0 bg-gradient-to-t from-ink/90 via-ink/10 to-transparent"></span>
+                <span class="absolute bottom-2 left-2"><span class="block text-xs font-semibold">HPE ML350 Gen 10</span><span class="block text-[10px] text-slate-400">Entry server · preview</span></span>
+              </button>
+              <button class="server-preview group relative h-24 overflow-hidden rounded-xl border border-line text-left transition hover:border-mint/50" data-server-preview="a100-node-01" aria-label="Preview A100 compute pool">
+                <img class="h-full w-full object-cover opacity-60 transition group-hover:scale-105 group-hover:opacity-80" src="https://images.unsplash.com/photo-1597852074816-d933c7d2b988?auto=format&amp;fit=crop&amp;w=480&amp;q=75" alt="" loading="lazy" referrerpolicy="no-referrer">
+                <span class="absolute inset-0 bg-gradient-to-t from-ink/90 via-ink/10 to-transparent"></span>
+                <span class="absolute bottom-2 left-2"><span class="block text-xs font-semibold">A100 Pool B</span><span class="block text-[10px] text-slate-400">128 GPUs · preview</span></span>
+              </button>
+            </div>
+            <p class="mt-2 text-[10px] text-slate-600">Illustrative server imagery · demo pool data</p>
+          </div>
+          <button id="browse-servers" class="mt-5 flex items-center justify-between rounded-2xl border border-mint/20 bg-mint/5 px-4 py-4 text-left transition hover:border-mint/50 hover:bg-mint/10">
+            <span><span class="block text-sm font-bold text-mint">Browse server catalog</span><span class="mt-1 block text-xs text-slate-500">View available configurations</span></span><span class="text-xl text-mint" aria-hidden="true">→</span>
+          </button>
+        </article>
+      </section>
+
+      <section class="mb-8">
+        <div class="mb-4 flex items-end justify-between">
+          <div><p class="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Infrastructure</p><h2 class="mt-1 text-xl font-semibold">Server manager</h2></div>
+          <span id="slot-count" class="text-xs text-slate-500">0 slots</span>
+        </div>
+        <div id="server-grid" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"></div>
+        <div id="server-empty" class="rounded-2xl border border-dashed border-line px-5 py-8 text-center text-sm text-slate-500">Your compute slots will appear here after investing.</div>
+      </section>
+
+      <section>
+        <div class="mb-4 flex items-end justify-between">
+          <div><p class="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Activity</p><h2 class="mt-1 text-xl font-semibold">Historical ledger</h2></div>
+          <span class="text-[10px] uppercase tracking-wider text-slate-600">Latest 50 events</span>
+        </div>
+        <div class="overflow-hidden rounded-2xl border border-line bg-panel/75">
+          <div class="grid grid-cols-[1.2fr_1fr_.8fr] border-b border-line px-4 py-3 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-500 sm:grid-cols-[1.4fr_1fr_1fr_.8fr]">
+            <span>Timestamp</span><span>Action</span><span class="hidden sm:block">Currency</span><span class="text-right">Amount</span>
+          </div>
+          <div id="ledger-rows" class="divide-y divide-line/70"></div>
+          <div id="ledger-empty" class="px-4 py-8 text-center text-sm text-slate-500">No transactions yet.</div>
+        </div>
+      </section>
+      <p class="mt-8 text-center text-[10px] leading-5 text-slate-600">Mint AI demo interface · server analytics and dividends are simulated. Payment confirmation and payouts require configured providers.</p>
+    </main>
+
+    <main id="server-catalog-view" class="hidden">
+      <section class="route-view">
+        <button class="route-back mb-5 inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-mint" data-route="/">← <span>Dashboard</span></button>
+        <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div><p class="text-xs font-semibold uppercase tracking-[.18em] text-mint">Compute marketplace</p><h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">Choose a server</h1><p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Compare the hardware configurations connected to each compute pool, then open a listing to create a payment request.</p></div>
+          <span class="rounded-full border border-violet/30 bg-violet/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-violet">Demo catalog</span>
+        </div>
+        <div id="server-catalog-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"></div>
+        <p class="mt-5 rounded-2xl border border-line bg-panel/70 p-4 text-xs leading-5 text-slate-500">Images are representative stock photos and are not photographs of verified Mint AI equipment. This demo does not confirm that any server is owned, available, or accepting investment.</p>
+      </section>
+    </main>
+
+    <main id="server-detail-view" class="hidden">
+      <section id="server-detail-content" class="route-view"></section>
+    </main>
+  </div>
+
+  <div id="server-modal" class="modal-wrap fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <button id="modal-scrim" aria-label="Close server details" class="absolute inset-0 cursor-default"></button>
+    <aside class="modal-panel safe-bottom relative h-full w-full max-w-lg overflow-y-auto border-l border-line bg-[#0b1019] p-5 shadow-2xl sm:p-7">
+      <div class="mb-7 flex items-center justify-between">
+        <div><p class="text-[10px] font-bold uppercase tracking-[.18em] text-mint">Cluster telemetry</p><h2 id="modal-title" class="mt-1 text-xl font-semibold">Server details</h2></div>
+        <button id="modal-close" class="grid h-10 w-10 place-items-center rounded-full border border-line text-slate-400 hover:text-white" aria-label="Close">✕</button>
+      </div>
+      <div id="modal-content"></div>
+    </aside>
+  </div>
+  <div id="payment-modal" class="modal-wrap fixed inset-0 z-[55] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center" role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
+    <button id="payment-modal-scrim" aria-label="Close payment instructions" class="absolute inset-0 cursor-default"></button>
+    <section class="modal-panel relative z-10 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl border border-line bg-[#0b1019] p-5 shadow-2xl sm:p-7">
+      <div class="mb-5 flex items-start justify-between gap-4">
+        <div><p class="text-[10px] font-bold uppercase tracking-[.18em] text-mint">Payment request</p><h2 id="payment-modal-title" class="mt-1 text-xl font-semibold">Complete your payment</h2></div>
+        <button id="payment-modal-close" class="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-line text-slate-400 hover:text-white" aria-label="Close">✕</button>
+      </div>
+      <div id="payment-instructions"></div>
+    </section>
+  </div>
+  <div id="toast" class="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 translate-y-4 rounded-xl border border-line bg-panel px-4 py-3 text-sm opacity-0 shadow-xl transition-all" role="status"></div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+    const demoUserId = new URLSearchParams(location.search).get("demo_user_id");
+    const headers = { "Content-Type": "application/json" };
+    if (tg?.initData) headers.Authorization = `tma ${tg.initData}`;
+    else if (demoUserId) headers["X-Demo-User-ID"] = demoUserId;
+    const state = { dashboard: null, tickerMessages: [], selectedServer: null, pricing: null, activePaymentIntent: null, paymentPollTimer: null };
+    const SERVER_PRESENTATION = {
+      "h100-node-01": {
+        gpu: "HPE ProLiant ML350 Gen10", specs: "Enterprise tower server · Gen 10",
+        image: "/assets/hpe-ml350-gen10.png"
+      },
+      "h100-node-02": {
+        gpu: "HPE ProLiant DL385 Gen11", specs: "Enterprise 2U rack server · Gen 11",
+        image: "/assets/hpe-proliant-dl385-gen11.png"
+      },
+      "a100-node-01": {
+        gpu: "HPE ProLiant Compute DL380a Gen12", specs: "Enterprise AI rack server · Gen 12",
+        image: "/assets/hpe-proliant-compute-dl380a-gen12.png"
+      },
+      "a100-node-02": {
+        gpu: "HPE ProLiant DL380 Gen11", specs: "Enterprise 2U rack server · Gen 11",
+        image: "/assets/hpe-proliant-dl380-gen11.png"
+      },
+      "h100-node-03": {
+        gpu: "ASUS ESC8000A-E11", specs: "Enterprise 8-GPU accelerator server",
+        image: "/assets/asus-esc8000a-e11.png"
+      },
+      "a100-node-03": {
+        gpu: "NVIDIA HGX (H100/H200) 8-GPU", specs: "8-GPU accelerated compute system · H100/H200",
+        image: "/assets/nvidia-hgx-h100-h200-8gpu.png"
+      }
+    };
+    const $ = (id) => document.getElementById(id);
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
+    const number = (value, max = 4) => Number(value).toLocaleString(undefined, { maximumFractionDigits: max });
+    const toast = (message) => {
+      const element = $("toast");
+      element.textContent = message;
+      element.classList.remove("opacity-0", "translate-y-4");
+      setTimeout(() => element.classList.add("opacity-0", "translate-y-4"), 2600);
+    };
+    async function api(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+      return data;
+    }
+    function fmtDuration(milliseconds) {
+      const total = Math.max(0, Math.ceil(milliseconds / 1000));
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+      return days ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m ${seconds}s`;
+    }
+    function appendWheel(message) {
+      state.tickerMessages.push(message);
+      state.tickerMessages = state.tickerMessages.slice(-12);
+      const text = state.tickerMessages.map(escapeHtml).join('<span class="px-5 text-mint/50">✦</span>');
+      document.querySelectorAll(".ticker-copy").forEach((node) => node.innerHTML = text || "Listening for network activity…");
+    }
+    function connectWheel() {
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${scheme}//${location.host}/ws/live-wheel`);
+      socket.onopen = () => { $("network-status").textContent = "Network online"; };
+      socket.onmessage = (event) => {
+        try { appendWheel(JSON.parse(event.data).message); } catch { /* Ignore malformed simulated feed entries. */ }
+      };
+      socket.onclose = () => {
+        $("network-status").textContent = "Reconnecting";
+        setTimeout(connectWheel, 2500);
+      };
+      socket.onerror = () => socket.close();
+    }
+    function renderBalances(data) {
+      const now = Date.now();
+      const lockedSlots = data.slots.filter((slot) => slot.principal_is_locked);
+      const clearingSlots = data.slots.filter((slot) => slot.payment_method === "stars" && slot.is_locked);
+      const totals = {};
+      lockedSlots.forEach((slot) => totals[slot.currency] = (totals[slot.currency] || 0) + Number(slot.net_investment));
+      $("locked-balances").innerHTML = Object.keys(totals).length
+        ? Object.entries(totals).map(([currency, amount]) => `<div>${number(amount)} <span class="text-sm font-medium text-slate-500">${escapeHtml(currency)}</span></div>`).join("")
+        : '<div class="text-base font-medium text-slate-500">No funds in locked wallet</div>';
+      $("clearance-notices").innerHTML = clearingSlots.length
+        ? clearingSlots.map((slot) => `<div class="flex items-center justify-between gap-3 rounded-xl border border-amber-200/10 bg-amber-200/5 px-3 py-2 text-xs"><span class="truncate text-slate-400">${escapeHtml(slot.label)} · XTR clearing</span><span class="clearance-countdown shrink-0 font-medium text-amber-200" data-until="${escapeHtml(slot.clearance_ready_at)}">${fmtDuration(new Date(slot.clearance_ready_at).getTime() - now)}</span></div>`).join("")
+        : lockedSlots.length
+          ? '<p class="text-xs text-slate-500">XTR timers clear after 21 days; USDT and TON have no timer. Principal remains locked until 50 qualified referrals.</p>'
+          : '<p class="text-xs text-slate-500">No principal remains locked.</p>';
+      const ghosts = data.ghost_dividends || [];
+      $("ghost-dividends").innerHTML = data.user.ghost_dividends_enabled && ghosts.length
+        ? ghosts.map((item) => `<div class="rounded-xl border border-violet/20 bg-violet/5 px-3 py-2 text-xs"><p class="font-semibold text-violet">Ghost dividend projection · ${escapeHtml(item.currency)} ${number(item.projected_total)}</p><p class="mt-1 text-slate-500">Principal ${number(item.principal)} + simulated ${number(item.ghost_dividend)}. Not withdrawable; resets Monday 00:00 UTC+3.</p></div>`).join("")
+        : data.user.true_dividends_active_until
+          ? `<p class="rounded-xl border border-mint/15 bg-mint/5 px-3 py-2 text-xs text-mint">True server dividends are enabled until ${new Date(data.user.true_dividends_active_until).toLocaleString()}.</p>`
+          : data.user.qualified_referrals >= 5
+            ? '<p class="text-xs text-slate-500">No ghost projection while true-dividend access is active.</p>'
+            : data.user.commission_received
+              ? '<p class="text-xs text-slate-500">Ghost dividends paused after your first referral commission. Reach 5 qualified referrals to unlock true dividends.</p>'
+              : "";
+
+      const available = data.balances.filter((balance) => Number(balance.withdrawable) > 0);
+      $("available-balances").innerHTML = available.length
+        ? available.map((balance) => `<div>${number(balance.withdrawable)} <span class="text-sm font-medium text-slate-500">${escapeHtml(balance.currency)}</span></div>`).join("")
+        : '<div class="text-base font-medium text-slate-500">No withdrawable balance</div>';
+      const select = $("withdraw-currency");
+      select.innerHTML = (available.length ? available : data.balances).map((balance) =>
+        `<option value="${escapeHtml(balance.currency)}">${escapeHtml(balance.currency)}</option>`
+      ).join("") || '<option value="USDT">USDT</option>';
+      $("withdraw-button").disabled = data.withdrawals_locked || !available.length || !data.user.wallet_address;
+      $("withdraw-note").textContent = data.withdrawals_locked
+        ? "Withdrawals are paused until every XTR slot has cleared its 21-day timer. Server principal remains locked until 50 qualified referrals."
+        : !data.user.wallet_address
+          ? "Add a payout wallet below to enable withdrawals."
+          : select.value === "XTR"
+            ? "Stars withdrawals enter manual Telegram/Fragment settlement. The 10% fee is taken in Stars; final TON/USDT conversion and network gas are recorded when paid."
+            : "A 10% platform fee applies. Final payout is adjusted to the provider-reported actual network gas.";
+      $("referral-progress").textContent = data.user.true_dividends_active_until
+        ? `${data.user.qualified_referrals} qualified referrals. True dividends are paying to your withdrawable wallet through ${new Date(data.user.true_dividends_active_until).toLocaleString()}; every next 5 qualified referrals unlock another 5-day window.`
+        : `${data.user.qualified_referrals} qualified referrals · ${data.user.referrals_to_next_milestone} more for the next 5-day true-dividend window · ${data.user.principal_unlock_referrals_remaining} more for principal unlock. Each qualified referral must make a confirmed deposit.`;
+    }
+    function renderSlots(slots) {
+      $("slot-count").textContent = `${slots.length} slot${slots.length === 1 ? "" : "s"}`;
+      $("server-empty").classList.toggle("hidden", slots.length > 0);
+      $("server-grid").innerHTML = slots.map((slot) => `
+        <button class="server-card glass rounded-2xl border border-line p-4 text-left transition hover:-translate-y-0.5 hover:border-mint/40 hover:shadow-glow" data-slot-id="${escapeHtml(slot.id)}">
+          <div class="mb-4 flex items-start justify-between gap-3">
+            <span class="grid h-10 w-10 place-items-center rounded-xl bg-mint/10 text-lg">▦</span>
+            <span class="rounded-full px-2.5 py-1 text-[10px] font-semibold ${!slot.is_active ? "bg-slate-200/10 text-slate-400" : slot.is_locked ? "bg-amber-200/10 text-amber-200" : "bg-mint/10 text-mint"}">${!slot.is_active ? "HISTORICAL" : slot.is_locked ? "21-DAY HOLD" : "ACTIVE"}</span>
+          </div>
+          <h3 class="font-semibold">${escapeHtml(getServerCatalog().find((server) => server.id === slot.server_id)?.name || slot.label)}</h3>
+          <p class="mt-1 text-xs text-slate-500">${escapeHtml(slot.gpu)} · ${escapeHtml(slot.gpu_count)} GPUs</p>
+          <div class="mt-4 flex items-end justify-between border-t border-line pt-3">
+            <div><p class="text-[10px] uppercase tracking-wider text-slate-600">Slot deposit</p><p class="mt-1 text-sm font-semibold">${number(slot.gross_deposit)} <span class="text-xs text-slate-500">${escapeHtml(slot.currency)}</span></p></div>
+            <div class="text-right"><p class="text-[10px] uppercase tracking-wider text-slate-600">${slot.daily_dividend_percent ? "Daily dividend" : "Simulated yield"}</p><p class="mt-1 text-sm font-semibold text-mint">${slot.daily_dividend_percent ? `${number(slot.daily_dividend_percent, 0)}% <span class="text-[10px] text-slate-500">PER DAY</span>` : `${number(slot.annual_yield_percent, 1)}% <span class="text-[10px] text-slate-500">APY</span>`}</p></div>
+          </div>
+          ${slot.daily_dividend_percent ? `<p class="mt-3 text-xs text-slate-400">${state.dashboard.user.true_dividends_active_until ? "True payout" : "Server rate"}: <span class="font-semibold text-mint">${number(slot.daily_dividend_amount)} ${escapeHtml(slot.currency)} per day</span> · earned: ${number(slot.dividends_earned)} ${escapeHtml(slot.currency)}</p>` : ""}
+        </button>`).join("");
+      document.querySelectorAll(".server-card").forEach((card) => card.addEventListener("click", () => {
+        const slot = state.dashboard.slots.find((item) => item.id === card.dataset.slotId);
+        if (slot) openSlot(slot);
+      }));
+    }
+    function openSlot(slot) {
+      const diag = slot.diagnostics;
+      const temperaturePercent = Math.min(100, Math.max(0, (diag.core_temperature_celsius - 50) * 2.8));
+      $("modal-title").textContent = slot.label;
+      $("modal-content").innerHTML = `
+        <div class="rounded-2xl border border-line bg-panel p-4">
+          <div class="flex items-center justify-between"><div><p class="text-xs text-slate-500">Hardware</p><p class="mt-1 font-medium">${escapeHtml(slot.gpu)}</p></div><span class="rounded-lg bg-mint/10 px-2 py-1 text-xs text-mint">${escapeHtml(slot.gpu_count)} GPUs</span></div>
+          <p class="mt-3 text-xs text-slate-500">${escapeHtml(slot.server_pool)} · ${escapeHtml(slot.currency)} ${number(slot.gross_deposit)} slot</p>
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <div class="rounded-2xl border border-line bg-panel p-4"><p class="text-xs text-slate-500">Core temperature</p><p class="mt-2 text-2xl font-semibold">${number(diag.core_temperature_celsius, 1)}<span class="text-sm text-slate-500">°C</span></p><div class="mt-3 h-1.5 overflow-hidden rounded-full bg-ink"><div class="h-full rounded-full bg-gradient-to-r from-mint to-amber-300" style="width:${temperaturePercent}%"></div></div></div>
+          <div class="rounded-2xl border border-line bg-panel p-4"><p class="text-xs text-slate-500">Compute load</p><p class="mt-2 text-2xl font-semibold">${number(diag.load_percent, 0)}<span class="text-sm text-slate-500">%</span></p><div class="mt-3 h-1.5 overflow-hidden rounded-full bg-ink"><div class="h-full rounded-full bg-violet" style="width:${diag.load_percent}%"></div></div></div>
+        </div>
+        <div class="mt-3 rounded-2xl border border-line bg-panel p-4"><div class="flex justify-between"><p class="text-xs text-slate-500">Network uptime</p><p class="text-xs font-semibold text-mint">${number(diag.network_uptime_percent, 2)}%</p></div><div class="mt-3 h-1.5 overflow-hidden rounded-full bg-ink"><div class="h-full w-[99.98%] rounded-full bg-mint"></div></div></div>
+        ${slot.daily_dividend_percent ? `<div class="mt-4 rounded-2xl border border-mint/15 bg-mint/5 p-4"><h3 class="text-sm font-semibold text-mint">${state.dashboard.user.true_dividends_active_until ? "True dividends active" : "Server dividend rate"}</h3><p class="mt-2 text-xs leading-5 text-slate-400">${number(slot.daily_dividend_percent, 0)}% per day · ${number(slot.daily_dividend_amount)} ${escapeHtml(slot.currency)} per day, based on net investment.${state.dashboard.user.true_dividends_active_until ? ` Paid to withdrawable wallet through ${new Date(state.dashboard.user.true_dividends_active_until).toLocaleString()}.` : " True payouts require an active 5-day qualified-referral milestone."}</p><p class="mt-2 text-xs text-slate-400">True dividends earned to date: <span class="font-semibold text-mint">${number(slot.dividends_earned)} ${escapeHtml(slot.currency)}</span></p><p class="mt-2 text-[10px] leading-4 text-slate-500">Illustrative demo return; not guaranteed.</p></div>` : ""}
+        <div class="mt-6"><h3 class="mb-3 text-xs font-bold uppercase tracking-[.14em] text-slate-400">Running tenant workloads</h3><div class="space-y-2">${diag.running_tenant_workloads.map((workload) => `<div class="flex items-center gap-3 rounded-xl border border-line bg-panel/60 px-3 py-3 text-sm"><span class="h-1.5 w-1.5 rounded-full bg-mint"></span>${escapeHtml(workload)}</div>`).join("")}</div></div>
+        <div class="mt-6 rounded-2xl ${slot.is_locked ? "border-amber-200/15 bg-amber-200/5" : "border-mint/15 bg-mint/5"} border p-4"><p class="text-xs font-semibold ${slot.is_locked ? "text-amber-200" : "text-mint"}">${slot.is_locked ? "Stars clearing window" : slot.is_active ? "Clearance complete" : "Historical slot"}</p><p class="mt-1 text-xs leading-5 text-slate-400">${slot.is_locked ? `Account withdrawals remain disabled while this slot is clearing. Ready ${new Date(slot.clearance_ready_at).toLocaleString()}.` : slot.is_active ? "This slot has no remaining deposit clearance hold." : "This slot is archived and no longer accrues simulated dividends."}</p></div>
+        ${slot.is_active && !slot.is_locked ? '<button id="archive-slot" class="mt-4 w-full rounded-xl border border-line px-4 py-3 text-sm font-semibold text-slate-300 transition hover:border-rose-300/30 hover:text-rose-200">Move slot to history</button>' : ""}
+      `;
+      const archiveButton = $("archive-slot");
+      if (archiveButton) archiveButton.addEventListener("click", async () => {
+        archiveButton.disabled = true;
+        try {
+          await api(`/api/slots/${encodeURIComponent(slot.id)}/close`, { method: "POST" });
+          $("server-modal").classList.remove("open");
+          await refresh();
+          toast("Slot moved to history");
+        } catch (error) {
+          archiveButton.disabled = false;
+          toast(error.message);
+        }
+      });
+      $("server-modal").classList.add("open");
+    }
+    function renderLedger(entries) {
+      $("ledger-empty").classList.toggle("hidden", entries.length > 0);
+      $("ledger-rows").innerHTML = entries.map((entry) => `
+        <div class="grid grid-cols-[1.2fr_1fr_.8fr] items-center px-4 py-3 text-xs sm:grid-cols-[1.4fr_1fr_1fr_.8fr]">
+          <span class="text-slate-500">${new Date(entry.created_at).toLocaleString()}</span>
+          <span class="font-medium">${escapeHtml(entry.event_type.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()))}</span>
+          <span class="hidden text-slate-400 sm:block">${escapeHtml(entry.currency)}</span>
+          <span class="text-right font-medium">${number(entry.amount)} <span class="text-slate-500 sm:hidden">${escapeHtml(entry.currency)}</span></span>
+        </div>`).join("");
+    }
+    function render(data) {
+      state.dashboard = data;
+      $("welcome-name").textContent = data.user.username ? `, @${data.user.username}` : "";
+      $("referral-link").value = data.user.referral_link;
+      $("wallet-address").value = data.user.wallet_address || "";
+      renderBalances(data);
+      renderSlots(data.slots);
+      renderLedger(data.ledger);
+    }
+    function renderServerCatalog() {
+      $("server-catalog-grid").innerHTML = getServerCatalog().map((server) => `
+        <article class="overflow-hidden rounded-3xl border border-line bg-panel transition hover:-translate-y-0.5 hover:border-mint/40 hover:shadow-glow">
+          <button class="catalog-server block w-full text-left" data-server-id="${escapeHtml(server.id)}" aria-label="View ${escapeHtml(server.name)}">
+            <div class="relative h-44 overflow-hidden bg-[#151e2b]">
+              <img class="h-full w-full object-cover transition duration-500 hover:scale-105" src="${escapeHtml(server.image)}" alt="Representative data-center server equipment" loading="lazy" referrerpolicy="no-referrer">
+              <span class="absolute left-3 top-3 rounded-full border border-white/10 bg-ink/75 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-mint">Illustrative image</span>
+            </div>
+            <div class="p-4">
+              <div class="flex items-start justify-between gap-3"><div><p class="text-[10px] font-semibold uppercase tracking-[.15em] text-slate-500">${escapeHtml(server.pool.replace("NVIDIA-", "").replace("-POOL-", " Pool "))}</p><h2 class="mt-1 font-semibold">${escapeHtml(server.name)}</h2></div><span class="text-lg text-mint" aria-hidden="true">↗</span></div>
+              <p class="mt-2 text-xs text-slate-400">${escapeHtml(server.gpu)}</p>
+              <p class="mt-1 text-xs text-slate-500">${escapeHtml(server.specs)}</p>
+              <div class="mt-4 flex items-end justify-between gap-2 border-t border-line pt-3">
+                <div><span class="block text-[10px] font-semibold uppercase tracking-wider text-mint">${escapeHtml(server.tier.label)} tier</span><span class="mt-1 block text-xs font-semibold">${number(server.tier.stars, 0)} Stars · $${Number(server.tier.usd).toFixed(2)}</span></div>
+                <span class="text-xs font-semibold text-mint">View details →</span>
+              </div>
+              ${server.daily_dividend_percent ? `<p class="mt-3 text-[10px] leading-4 text-slate-400">Simulated daily dividend: ${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} Stars per day at the listed price.</p>` : ""}
+            </div>
+          </button>
+        </article>`).join("");
+      document.querySelectorAll(".catalog-server").forEach((button) => {
+        button.addEventListener("click", () => navigate(`/servers/${button.dataset.serverId}`));
+      });
+    }
+    function renderServerDetail(server) {
+      state.selectedServer = server;
+      $("server-detail-content").innerHTML = `
+        <button class="route-back mb-5 inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-mint" data-route="/servers">← <span>Server catalog</span></button>
+        <div class="overflow-hidden rounded-3xl border border-line bg-panel">
+          <div class="relative h-56 bg-[#151e2b] sm:h-72"><img class="h-full w-full object-cover" src="${escapeHtml(server.image)}" alt="Representative data-center server equipment" referrerpolicy="no-referrer"><span class="absolute bottom-3 left-3 rounded-full border border-white/10 bg-ink/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-300">Representative stock imagery</span></div>
+          <div class="grid gap-6 p-5 sm:p-7 lg:grid-cols-[1fr_.8fr]">
+            <div><p class="text-xs font-semibold uppercase tracking-[.17em] text-mint">${escapeHtml(server.pool)}</p><h1 class="mt-2 text-2xl font-semibold">${escapeHtml(server.name)}</h1><p class="mt-2 text-sm text-slate-400">${escapeHtml(server.gpu)}</p>
+              <dl class="mt-6 grid grid-cols-2 gap-3">
+                <div class="rounded-2xl border border-line bg-ink/60 p-4"><dt class="text-[10px] uppercase tracking-wider text-slate-500">Pool size</dt><dd class="mt-2 text-sm font-semibold">${escapeHtml(server.specs.split("·")[0].trim())}</dd></div>
+                <div class="rounded-2xl border border-line bg-ink/60 p-4"><dt class="text-[10px] uppercase tracking-wider text-slate-500">Connectivity</dt><dd class="mt-2 text-sm font-semibold">High-speed fabric</dd></div>
+              </dl>
+              ${server.daily_dividend_percent ? `<div class="mt-5 rounded-2xl border border-mint/15 bg-mint/5 p-4"><h2 class="text-sm font-semibold text-mint">Simulated daily dividends</h2><p class="mt-2 text-xs leading-5 text-slate-400">${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} Stars per day on the ${number(server.tier.stars, 0)}-Star listed price.</p><p class="mt-2 text-[10px] leading-4 text-slate-500">Backend accrual uses each confirmed slot's net investment. Illustrative demo return; not guaranteed.</p></div>` : ""}
+              <p class="mt-4 text-xs leading-5 text-slate-500">Listing and telemetry are illustrative demo data. The image does not verify or represent a specific physical server.</p>
+            </div>
+            <form id="investment-form" class="self-start rounded-2xl border border-line bg-ink/60 p-4 sm:p-5">
+              <h2 class="text-base font-semibold">${escapeHtml(server.tier.label)} server tier</h2><p class="mt-1 text-xs leading-5 text-slate-500">This server has a fixed investment tier.</p>
+              <label class="mt-4 block text-xs font-medium text-slate-400" for="payment-method">Payment method</label>
+              <select id="payment-method" class="mt-2 w-full rounded-xl border border-line bg-panel px-3 py-3 text-sm outline-none focus:border-mint"><option value="crypto">Crypto · instant clear</option><option value="stars">Telegram Stars · 21-day hold</option></select>
+              <label class="mt-4 block text-xs font-medium text-slate-400" for="investment-currency">Currency</label>
+              <select id="investment-currency" class="mt-2 w-full rounded-xl border border-line bg-panel px-3 py-3 text-sm outline-none focus:border-mint"><option value="USDT">USDT</option><option value="TON">TON</option></select>
+              <div class="mt-4 rounded-xl border border-mint/15 bg-mint/5 px-3 py-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">${number(server.tier.stars, 0)} Stars · $${Number(server.tier.usd).toFixed(2)} USDT</p>
+                <p id="selected-price" class="mt-1 text-sm font-bold text-mint">Select a payment currency.</p>
+              </div>
+              <p id="investment-note" class="mt-3 min-h-4 text-[11px] leading-5 text-slate-500">Crypto clears immediately. Stars are held for 21 days.</p>
+              <button class="mt-3 w-full rounded-xl bg-mint px-4 py-3 text-sm font-bold text-ink transition hover:bg-white disabled:cursor-wait disabled:opacity-50" type="submit">Create payment request</button>
+            </form>
+          </div>
+        </div>`;
+      $("payment-method").addEventListener("change", (event) => {
+        $("investment-currency").innerHTML = event.target.value === "stars"
+          ? '<option value="XTR">Telegram Stars · XTR</option>'
+          : '<option value="USDT">USDT</option><option value="TON">TON</option>';
+        $("investment-currency").querySelector('option[value="TON"]')?.toggleAttribute(
+          "disabled",
+          !state.pricing?.ton_quote_available
+        );
+        updateSelectedPrice();
+        $("investment-note").textContent = event.target.value === "stars"
+          ? "Stars deposits are held for 21 days. Withdrawals pause while any Stars slot is clearing."
+          : "Crypto deposits clear immediately.";
+      });
+      $("investment-currency").addEventListener("change", updateSelectedPrice);
+      $("investment-currency").querySelector('option[value="TON"]')?.toggleAttribute(
+        "disabled",
+        !state.pricing?.ton_quote_available
+      );
+      updateSelectedPrice();
+      $("investment-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = event.submitter;
+        button.disabled = true;
+        try {
+              const intent = await api("/api/payment-intents", {
+                method: "POST",
+                headers: { "Idempotency-Key": createIdempotencyKey() },
+                body: JSON.stringify({
+                  server_id: server.id,
+                  payment_method: $("payment-method").value,
+                  currency: $("investment-currency").value
+                })
+              });
+              showPaymentIntent(intent);
+        } catch (error) {
+          $("investment-note").textContent = error.message;
+          $("investment-note").className = "mt-3 min-h-4 text-[11px] leading-5 text-rose-300";
+          button.disabled = false;
+        }
+      });
+    }
+    function createIdempotencyKey() {
+      if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+      return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    }
+    function showPaymentIntent(intent) {
+      state.activePaymentIntent = intent;
+      const expiry = new Date(intent.expires_at).toLocaleString();
+      if (intent.payment_method === "stars") {
+        $("payment-instructions").innerHTML = `
+          <div class="rounded-2xl border border-line bg-panel p-4">
+            <p class="text-sm font-semibold">${number(intent.expected_amount, 0)} Telegram Stars</p>
+            <p class="mt-2 text-xs leading-5 text-slate-400">Your server slot is created only after Telegram confirms this payment. Stars-funded slots have a 21-day withdrawal hold.</p>
+          </div>
+          ${intent.invoice_url
+            ? '<button id="open-stars-invoice" class="mt-4 w-full rounded-xl bg-mint px-4 py-3 text-sm font-bold text-ink">Pay with Telegram Stars</button>'
+            : '<p class="mt-4 rounded-xl border border-amber-200/20 bg-amber-200/5 p-3 text-xs leading-5 text-amber-100">Stars invoices are not configured. Set TELEGRAM_BOT_TOKEN and restart the API to enable payment.</p>'}
+          <p id="payment-status" class="mt-4 text-center text-xs text-slate-500">Awaiting Telegram payment · expires ${escapeHtml(expiry)}</p>
+          <button id="check-payment-status" class="mt-3 w-full rounded-xl border border-line px-4 py-3 text-sm font-semibold text-slate-300 hover:border-mint/40">Check payment status</button>`;
+        $("open-stars-invoice")?.addEventListener("click", () => {
+          if (tg?.openInvoice) {
+            tg.openInvoice(intent.invoice_url, (status) => {
+              if (status === "paid") pollPaymentIntent(true);
+            });
+          } else {
+            window.open(intent.invoice_url, "_blank", "noopener");
+          }
+        });
+      } else {
+        const instructions = intent.crypto || {};
+        const canPay = Boolean(instructions.configured && instructions.deposit_address);
+        $("payment-instructions").innerHTML = `
+          <div class="rounded-2xl border border-line bg-panel p-4">
+            <p class="text-sm font-semibold">${number(intent.expected_amount, 8)} ${escapeHtml(intent.currency)}</p>
+            <p class="mt-1 text-[11px] text-slate-500">Send the exact amount on ${escapeHtml(instructions.network || "TON")} before ${escapeHtml(expiry)}.</p>
+            ${canPay ? `
+              <p class="mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Deposit address</p>
+              <div class="mt-1 flex gap-2"><code id="deposit-address" class="min-w-0 flex-1 break-all rounded-lg bg-ink p-2 text-xs">${escapeHtml(instructions.deposit_address)}</code><button class="copy-payment-value rounded-lg border border-line px-3 text-xs text-mint" data-copy-target="deposit-address">Copy</button></div>
+              <p class="mt-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Payment memo · required</p>
+              <div class="mt-1 flex gap-2"><code id="deposit-memo" class="min-w-0 flex-1 break-all rounded-lg bg-ink p-2 text-xs">${escapeHtml(instructions.memo)}</code><button class="copy-payment-value rounded-lg border border-line px-3 text-xs text-mint" data-copy-target="deposit-memo">Copy</button></div>
+            ` : '<p class="mt-4 rounded-xl border border-amber-200/20 bg-amber-200/5 p-3 text-xs leading-5 text-amber-100">On-chain deposits are not configured. Set CRYPTO_DEPOSIT_ADDRESS and configure the TON indexer webhook before sending funds.</p>'}
+          </div>
+          <p id="payment-status" class="mt-4 text-center text-xs text-slate-500">Waiting for authenticated chain confirmation.</p>
+          <button id="check-payment-status" class="mt-3 w-full rounded-xl border border-line px-4 py-3 text-sm font-semibold text-slate-300 hover:border-mint/40">Check payment status</button>`;
+      }
+      $("payment-modal").classList.add("open");
+      $("payment-modal-title").textContent = intent.status === "confirmed" ? "Payment confirmed" : "Complete your payment";
+      $("check-payment-status").addEventListener("click", () => pollPaymentIntent(true));
+      if (state.paymentPollTimer) clearInterval(state.paymentPollTimer);
+      state.paymentPollTimer = setInterval(() => pollPaymentIntent(false), 4000);
+      pollPaymentIntent(false);
+    }
+    async function pollPaymentIntent(showErrors) {
+      const intent = state.activePaymentIntent;
+      if (!intent) return;
+      try {
+        const latest = await api(`/api/payment-intents/${encodeURIComponent(intent.intent_id)}`);
+        state.activePaymentIntent = latest;
+        const status = $("payment-status");
+        if (status) status.textContent = latest.status === "confirmed"
+          ? "Payment confirmed. Your server slot is being activated."
+          : latest.status === "expired" || latest.status === "failed"
+            ? `Payment request ${latest.status}. No slot was created.`
+            : `Awaiting payment confirmation · expires ${new Date(latest.expires_at).toLocaleString()}`;
+        if (latest.status === "confirmed") {
+          clearInterval(state.paymentPollTimer);
+          state.paymentPollTimer = null;
+          $("payment-modal").classList.remove("open");
+          await refresh();
+          navigate("/");
+          toast("Payment confirmed · server slot activated");
+        } else if (["expired", "failed"].includes(latest.status)) {
+          clearInterval(state.paymentPollTimer);
+          state.paymentPollTimer = null;
+        }
+      } catch (error) {
+        if (showErrors) toast(error.message);
+      }
+    }
+    async function loadPricing() {
+      state.pricing = await api("/api/pricing");
+      if (state.dashboard) renderSlots(state.dashboard.slots);
+      renderRoute();
+    }
+    function updateSelectedPrice() {
+      const server = state.selectedServer;
+      if (!server || !$("selected-price")) return;
+      const currency = $("investment-currency").value;
+      if (currency === "XTR") {
+        $("selected-price").textContent = `${number(server.tier.stars, 0)} Stars (XTR)`;
+      } else if (currency === "TON") {
+        $("selected-price").textContent = server.ton_amount
+          ? `≈ ${number(server.ton_amount, 8)} TON · $${Number(server.tier.usd).toFixed(2)} equivalent`
+          : "Live TON quote unavailable.";
+      } else {
+        $("selected-price").textContent = `${Number(server.tier.usd).toFixed(2)} USDT`;
+      }
+    }
+    function getServerCatalog() {
+      return (state.pricing?.servers || []).map((server) => ({
+        ...SERVER_PRESENTATION[server.id],
+        ...server
+      }));
+    }
+    function navigate(path) {
+      history.pushState({}, "", `${path}${location.search}`);
+      renderRoute();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    function renderRoute() {
+      const path = location.pathname.replace(/\/+$/, "") || "/";
+      $("dashboard-view").classList.toggle("hidden", path !== "/");
+      $("server-catalog-view").classList.toggle("hidden", path !== "/servers");
+      $("server-detail-view").classList.toggle("hidden", !path.startsWith("/servers/"));
+      if (path === "/servers") {
+        renderServerCatalog();
+      } else if (path.startsWith("/servers/")) {
+        const server = getServerCatalog().find((item) => item.id === decodeURIComponent(path.slice("/servers/".length)));
+        if (server) renderServerDetail(server);
+        else navigate("/servers");
+      }
+    }
+    async function refresh() {
+      render(await api("/api/dashboard"));
+    }
+    $("copy-link").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText($("referral-link").value);
+        $("copy-status").textContent = "Referral link copied";
+      } catch {
+        $("referral-link").select();
+        document.execCommand("copy");
+        $("copy-status").textContent = "Referral link copied";
+      }
+      setTimeout(() => $("copy-status").textContent = "", 2200);
+    });
+    $("browse-servers").addEventListener("click", () => navigate("/servers"));
+    document.addEventListener("click", (event) => {
+      const copyPayment = event.target.closest("[data-copy-target]");
+      if (copyPayment) {
+        const value = $(copyPayment.dataset.copyTarget)?.textContent || "";
+        navigator.clipboard.writeText(value).then(
+          () => toast("Copied"),
+          () => toast("Clipboard access unavailable")
+        );
+        return;
+      }
+      const previewButton = event.target.closest("[data-server-preview]");
+      if (previewButton) {
+        navigate(`/servers/${previewButton.dataset.serverPreview}`);
+        return;
+      }
+      const backButton = event.target.closest("[data-route]");
+      if (backButton) navigate(backButton.dataset.route);
+    });
+    window.addEventListener("popstate", renderRoute);
+    $("payment-modal-close").addEventListener("click", () => $("payment-modal").classList.remove("open"));
+    $("payment-modal-scrim").addEventListener("click", () => $("payment-modal").classList.remove("open"));
+    $("withdraw-currency").addEventListener("change", () => {
+      const note = $("withdraw-note");
+      if (state.dashboard?.withdrawals_locked) {
+        note.textContent = "Withdrawals are paused until every XTR slot has cleared its 21-day timer.";
+      } else if (!state.dashboard?.user.wallet_address) {
+        note.textContent = "Add a payout wallet below to enable withdrawals.";
+      } else if ($("withdraw-currency").value === "XTR") {
+        note.textContent = "Stars withdrawals enter manual Telegram/Fragment settlement. The 10% fee is taken in Stars; final TON/USDT conversion and actual network gas are recorded at settlement.";
+      } else {
+        note.textContent = "Review the estimated network fee before confirming. Final payout is adjusted to the provider-reported actual fee.";
+      }
+    });
+    $("withdraw-button").addEventListener("click", async () => {
+      const button = $("withdraw-button");
+      button.disabled = true;
+      try {
+        const currency = $("withdraw-currency").value;
+        const quote = await api("/api/withdrawal-quotes", {
+          method: "POST",
+          body: JSON.stringify({
+            amount: $("withdraw-amount").value,
+            currency
+          })
+        });
+        const message = quote.manual_settlement
+          ? `Withdraw ${number(quote.gross_amount)} XTR? Platform fee: ${number(quote.platform_fee)} XTR. ${number(quote.payout_amount)} XTR will be converted manually; actual TON gas is deducted from the payout.`
+          : `Withdraw ${number(quote.gross_amount)} ${currency}? Platform fee: ${number(quote.platform_fee)} ${currency}. Estimated gas: ${number(quote.network_fee_estimate)} ${currency} (${number(quote.native_network_fee_estimate)} TON). Estimated payout: ${number(quote.payout_amount)} ${currency}. Final payout uses actual gas.`;
+        if (!(await confirmWithdrawal(message))) return;
+        const result = await api("/api/withdrawals", {
+          method: "POST",
+          headers: { "Idempotency-Key": createIdempotencyKey() },
+          body: JSON.stringify({
+            quote_id: quote.quote_id
+          })
+        });
+        toast(result.status === "manual_review"
+          ? `Stars withdrawal submitted for manual settlement: ${number(result.payout_amount)} XTR after the 10% platform fee.`
+          : `Withdrawal queued: approximately ${number(result.payout_amount)} ${result.currency} after quoted fees.`);
+        $("withdraw-amount").value = "";
+        await refresh();
+        if (result.status !== "manual_review") pollWithdrawal(result.withdrawal_id);
+      } catch (error) { toast(error.message); }
+      finally { button.disabled = false; }
+    });
+    function confirmWithdrawal(message) {
+      if (tg?.showPopup) {
+        return new Promise((resolve) => {
+          tg.showPopup({
+            title: "Confirm withdrawal",
+            message,
+            buttons: [
+              { id: "confirm", type: "default", text: "Confirm" },
+              { id: "cancel", type: "cancel", text: "Cancel" }
+            ]
+          }, (buttonId) => resolve(buttonId === "confirm"));
+        });
+      }
+      return Promise.resolve(window.confirm(message));
+    }
+    async function pollWithdrawal(withdrawalId) {
+      const attempts = 30;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          const status = await api(`/api/withdrawals/${encodeURIComponent(withdrawalId)}`);
+          if (status.status === "completed") {
+            toast(status.settlement_currency
+              ? `Payout sent: ${number(status.settlement_amount)} ${status.settlement_currency}`
+              : `Payout sent: ${number(status.payout_amount)} ${status.currency}. Network fee: ${number(status.network_fee_amount || 0)} ${status.network_fee_currency || ""}`);
+            await refresh();
+            return;
+          }
+          if (status.status === "manual_review") {
+            toast("Withdrawal is awaiting manual settlement review.");
+            return;
+          }
+          if (status.status === "refunded") {
+            toast(status.error_message || "Payout failed; funds were refunded.");
+            await refresh();
+            return;
+          }
+        } catch (error) {
+          toast(`Could not check withdrawal status: ${error.message}`);
+          return;
+        }
+      }
+      toast("Withdrawal is still processing. Check your ledger shortly.");
+    }
+    $("modal-close").addEventListener("click", () => $("server-modal").classList.remove("open"));
+    $("modal-scrim").addEventListener("click", () => $("server-modal").classList.remove("open"));
+    $("server-modal").addEventListener("click", (event) => {
+      if (event.target === $("server-modal")) $("server-modal").classList.remove("open");
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") $("server-modal").classList.remove("open");
+    });
+    setInterval(() => {
+      document.querySelectorAll(".clearance-countdown").forEach((node) => {
+        node.textContent = fmtDuration(new Date(node.dataset.until).getTime() - Date.now());
+      });
+    }, 1000);
+    $("profile-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await api("/api/profile", { method: "PUT", body: JSON.stringify({ wallet_address: $("wallet-address").value }) });
+        toast("Payout wallet saved");
+        await refresh();
+      } catch (error) { toast(error.message); }
+    });
+
+    async function start() {
+      try {
+        const params = new URLSearchParams(location.search);
+        const startParam = tg?.initDataUnsafe?.start_param || params.get("start") || params.get("startapp");
+        await api("/api/register", { method: "POST", body: JSON.stringify({ referral_code: startParam || null, username: tg?.initDataUnsafe?.user?.username || null }) });
+        await refresh();
+        await loadPricing();
+        renderRoute();
+        connectWheel();
+      } catch (error) {
+        $("network-status").textContent = "API unavailable";
+        toast(error.message);
+      }
+    }
+    start();
+    setInterval(() => {
+      if (!document.hidden) {
+        refresh().catch((error) => {
+          $("network-status").textContent = "Sync error";
+          $("network-status").title = error.message;
+        });
+      }
+    }, 15000);
+  </script>
+</body>
+</html>
