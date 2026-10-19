@@ -10,7 +10,6 @@ from config import PAYMENT_INTENT_TTL_MINUTES, PAYMENT_QUOTE_MINUTES
 from mock_data import SERVER_POOLS
 from models import PaymentIntent, utc_now
 from payments.crypto import build_crypto_instructions, build_deposit_memo
-from payments.stars import TelegramStarsAdapter
 from pricing import get_server_listing, get_tier, price_tier
 
 
@@ -24,19 +23,8 @@ async def create_payment_intent(
     *,
     user_id: int,
     server_id: str,
-    payment_method: str,
-    currency: str,
     idempotency_key: str | None = None,
-    bot_token: str = "",
 ) -> PaymentIntent:
-    normalized_method = payment_method.lower()
-    normalized_currency = currency.upper()
-    if normalized_method not in {"stars", "crypto"}:
-        raise ValueError("payment_method must be stars or crypto")
-    if normalized_method == "stars" and normalized_currency != "XTR":
-        raise ValueError("Stars payments require XTR")
-    if normalized_method == "crypto" and normalized_currency not in {"TON", "USDT"}:
-        raise ValueError("Crypto payments require TON or USDT")
     if idempotency_key:
         existing = await db.scalar(
             select(PaymentIntent).where(PaymentIntent.idempotency_key == idempotency_key)
@@ -45,8 +33,7 @@ async def create_payment_intent(
             if (
                 existing.user_id != user_id
                 or existing.server_id != server_id
-                or existing.payment_method != normalized_method
-                or existing.currency != normalized_currency
+                or existing.currency != "TON"
             ):
                 raise ValueError("Idempotency key was already used for a different payment intent")
             return existing
@@ -56,7 +43,7 @@ async def create_payment_intent(
     if server["pool"] not in SERVER_POOLS:
         raise ValueError("Unknown server pool")
 
-    deposit_amount, ton_usd = await price_tier(server["tier_id"], normalized_currency)
+    deposit_amount = price_tier(server["tier_id"])
     now = utc_now()
     intent = PaymentIntent(
         id=str(uuid4()),
@@ -64,13 +51,12 @@ async def create_payment_intent(
         server_id=server["id"],
         pricing_tier_id=tier["id"],
         server_pool=server["pool"],
-        payment_method=normalized_method,
-        currency=normalized_currency,
+        payment_method="crypto",
+        currency="TON",
         expected_amount=deposit_amount,
-        ton_usd_rate=ton_usd,
         quote_expires_at=now + timedelta(minutes=PAYMENT_QUOTE_MINUTES),
         status="pending",
-        provider="stars" if normalized_method == "stars" else "ton",
+        provider="ton",
         expires_at=now + timedelta(minutes=PAYMENT_INTENT_TTL_MINUTES),
         idempotency_key=idempotency_key,
     )
@@ -79,8 +65,7 @@ async def create_payment_intent(
     await db.flush()
 
     intent.status = "awaiting_payment"
-    if normalized_method == "crypto":
-        intent.chain = "TON"
+    intent.chain = "TON"
     try:
         await db.commit()
     except IntegrityError:
@@ -93,22 +78,10 @@ async def create_payment_intent(
         if existing is None or (
             existing.user_id != user_id
             or existing.server_id != server_id
-            or existing.payment_method != normalized_method
-            or existing.currency != normalized_currency
+            or existing.currency != "TON"
         ):
             raise ValueError("Idempotency key was already used for a different payment intent")
         return existing
-
-    if normalized_method == "stars" and bot_token and not intent.invoice_url:
-        try:
-            invoice_url = await TelegramStarsAdapter.create_invoice_link(intent, bot_token)
-        except Exception:
-            intent.status = "failed"
-            intent.failure_reason = "Unable to create Telegram Stars invoice"
-            await db.commit()
-            raise
-        intent.invoice_url = invoice_url
-        await db.commit()
     await db.refresh(intent)
     return intent
 
@@ -132,10 +105,8 @@ def build_client_payload(
         "quote_expires_at": _iso_utc(intent.quote_expires_at),
         "expires_at": _iso_utc(intent.expires_at),
         "confirmed_at": _iso_utc(intent.confirmed_at) if intent.confirmed_at else None,
+        "tx_hash": intent.tx_hash,
         "slot_id": slot_id,
     }
-    if intent.payment_method == "stars":
-        payload["invoice_url"] = intent.invoice_url
-    else:
-        payload["crypto"] = build_crypto_instructions(intent)
+    payload["crypto"] = build_crypto_instructions(intent)
     return payload

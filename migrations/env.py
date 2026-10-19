@@ -2,7 +2,7 @@ from logging.config import fileConfig
 import os
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import Column, MetaData, String, Table, inspect, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from database import DATABASE_URL
@@ -29,11 +29,38 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
+    if connection.dialect.name == "postgresql":
+        inspector = inspect(connection)
+        if not inspector.has_table("alembic_version"):
+            Table(
+                "alembic_version",
+                MetaData(),
+                Column("version_num", String(128), primary_key=True),
+            ).create(connection)
+        else:
+            version_column = next(
+                (
+                    column
+                    for column in inspector.get_columns("alembic_version")
+                    if column["name"] == "version_num"
+                ),
+                None,
+            )
+            version_length = (
+                getattr(version_column["type"], "length", None)
+                if version_column
+                else None
+            )
+            if version_length is not None and version_length < 128:
+                connection.exec_driver_sql(
+                    "ALTER TABLE alembic_version "
+                    "ALTER COLUMN version_num TYPE VARCHAR(128)"
+                )
+        connection.commit()
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
-        render_as_batch=connection.dialect.name == "sqlite",
     )
     with context.begin_transaction():
         context.run_migrations()

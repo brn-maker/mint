@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -15,12 +15,12 @@ def utc_now() -> datetime:
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     language_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     wallet_address: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    referred_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    referred_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
     referral_code: Mapped[str] = mapped_column(String(6), unique=True, index=True)
     accumulated_dividends: Mapped[Decimal] = mapped_column(
         Numeric(24, 8), default=Decimal("0"), nullable=False
@@ -42,7 +42,7 @@ class User(Base):
 class ReferralPending(Base):
     __tablename__ = "referral_pending"
 
-    user_id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     referral_code: Mapped[str] = mapped_column(String(6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -56,7 +56,7 @@ class PaymentIntent(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     server_id: Mapped[str] = mapped_column(String(32))
     pricing_tier_id: Mapped[str] = mapped_column(String(32))
     server_pool: Mapped[str] = mapped_column(String(64))
@@ -87,7 +87,7 @@ class ServerSlot(Base):
     __tablename__ = "server_slots"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     payment_intent_id: Mapped[str | None] = mapped_column(
         ForeignKey("payment_intents.id"), unique=True, nullable=True
     )
@@ -119,7 +119,7 @@ class ReferralDividendMilestone(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     referral_threshold: Mapped[int] = mapped_column(nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -131,7 +131,7 @@ class WalletBalance(Base):
     __table_args__ = (UniqueConstraint("user_id", "currency", name="uq_wallet_user_currency"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     currency: Mapped[str] = mapped_column(String(8))
     withdrawable_amount: Mapped[Decimal] = mapped_column(
         Numeric(24, 8), default=Decimal("0"), nullable=False
@@ -148,7 +148,7 @@ class LedgerEntry(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), index=True, nullable=True)
     account_code: Mapped[str] = mapped_column(String(64), index=True)
     currency: Mapped[str] = mapped_column(String(8))
     amount: Mapped[Decimal] = mapped_column(Numeric(24, 8))
@@ -170,7 +170,7 @@ class WithdrawalRequest(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     quote_id: Mapped[str | None] = mapped_column(
         ForeignKey("withdrawal_quotes.id"), unique=True, nullable=True
     )
@@ -211,7 +211,7 @@ class WithdrawalQuote(Base):
     __tablename__ = "withdrawal_quotes"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
     currency: Mapped[str] = mapped_column(String(8))
     gross_amount: Mapped[Decimal] = mapped_column(Numeric(24, 8))
     platform_fee: Mapped[Decimal] = mapped_column(Numeric(24, 8))
@@ -240,7 +240,7 @@ class FinancialTelemetry(Base):
     __tablename__ = "financial_telemetry"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(24), index=True)
     currency: Mapped[str] = mapped_column(String(8))
     gross_amount: Mapped[Decimal] = mapped_column(Numeric(24, 8), default=Decimal("0"))

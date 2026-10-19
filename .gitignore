@@ -12,6 +12,9 @@ venv/
 .mypy_cache/
 *.egg-info/
 
+# Node
+node_modules/
+
 # Local databases
 *.db
 *.db-journal

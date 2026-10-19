@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import (
     AMOUNT_QUANTUM,
     REFERRAL_COMMISSION_RATE,
-    STARS_CLEARANCE_PERIOD,
     WITHDRAWAL_QUOTE_TTL_SECONDS,
     WITHDRAWAL_FEE_RATE,
 )
@@ -35,25 +34,12 @@ from models import (
     utc_now,
 )
 from payments.payouts import (
-    NetworkFeeQuote,
     PayoutAdapter,
     PayoutPending,
     PayoutRejected,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _currency_for(payment_method: str, currency: str | None) -> str:
-    normalized_method = payment_method.lower()
-    selected_currency = (currency or ("XTR" if normalized_method == "stars" else "USDT")).upper()
-    if normalized_method == "stars" and selected_currency != "XTR":
-        raise ValueError("Stars investments must use XTR")
-    if normalized_method == "crypto" and selected_currency not in {"TON", "USDT"}:
-        raise ValueError("Crypto investments must use TON or USDT")
-    if normalized_method not in {"stars", "crypto"}:
-        raise ValueError("payment_method must be 'stars' or 'crypto'")
-    return selected_currency
 
 
 async def confirm_investment_from_payment(
@@ -74,6 +60,8 @@ async def confirm_investment_from_payment(
     ).scalar_one_or_none()
     if intent is None:
         raise ValueError("Payment intent not found")
+    if intent.payment_method != "crypto" or intent.currency != "TON":
+        raise ValueError("Only TON crypto payment intents are supported")
     if intent.status == "confirmed":
         if external_payment_id and intent.external_payment_id != external_payment_id:
             raise ValueError("Intent was already confirmed by a different provider payment")
@@ -101,9 +89,9 @@ async def confirm_investment_from_payment(
 
     user_id = intent.user_id
     amount = Decimal(intent.expected_amount).quantize(AMOUNT_QUANTUM, rounding=ROUND_DOWN)
-    payment_method = intent.payment_method
-    selected_currency = _currency_for(payment_method, intent.currency)
-    clearance_ready_at = now + STARS_CLEARANCE_PERIOD if payment_method == "stars" else now
+    selected_currency = "TON"
+    payment_method = "crypto"
+    clearance_ready_at = now
 
     try:
         user = await db.get(User, user_id)
@@ -147,6 +135,7 @@ async def confirm_investment_from_payment(
                             reference_id=intent.id,
                             idempotency_key=f"commission:{intent.id}",
                             telemetry={"commissions_paid": commission},
+                            tx_hash=tx_hash,
                         )
                         total_commissions += commission
                         commissions.append({"user_id": referrer.id, "amount": str(commission)})
@@ -179,6 +168,7 @@ async def confirm_investment_from_payment(
             gross_amount=amount,
             reference_type="payment_intent",
             reference_id=intent.id,
+            tx_hash=tx_hash,
         )
         await db.commit()
         return {
@@ -257,6 +247,7 @@ async def sync_referral_rewards(
         slots_result = await db.execute(
             select(ServerSlot).where(
                 ServerSlot.user_id == user_id,
+                ServerSlot.currency == "TON",
                 ServerSlot.principal_unlocked_at.is_(None),
             )
         )
@@ -287,6 +278,7 @@ async def accrue_dividends(db: AsyncSession, user: User) -> None:
     result = await db.execute(
         select(ServerSlot).where(
             ServerSlot.user_id == user.id,
+            ServerSlot.currency == "TON",
             ServerSlot.is_active.is_(True),
             ServerSlot.status == "active",
         )
@@ -392,7 +384,7 @@ async def quote_withdrawal(
         raise ValueError("Withdrawal amount must be a finite positive number")
     requested_amount = raw_amount.quantize(AMOUNT_QUANTUM, rounding=ROUND_DOWN)
     selected_currency = currency.upper()
-    if selected_currency not in {"XTR", "TON", "USDT"}:
+    if selected_currency != "TON":
         raise ValueError("Unsupported withdrawal currency")
     if requested_amount <= 0:
         raise ValueError("Withdrawal amount is below supported precision")
@@ -401,18 +393,6 @@ async def quote_withdrawal(
     if user is None:
         raise ValueError("User is not registered")
     now = utc_now()
-    slots_result = await db.execute(
-        select(ServerSlot).where(
-            ServerSlot.user_id == user_id,
-            ServerSlot.clearance_ready_at > now,
-        )
-    )
-    locked_slots = list(slots_result.scalars())
-    if locked_slots:
-        next_clearance = min(_as_utc(slot.clearance_ready_at) for slot in locked_slots)
-        raise ValueError(
-            f"Withdrawals are locked until {next_clearance.isoformat()} while Stars slots clear"
-        )
     if not user.wallet_address:
         raise ValueError("Set a wallet address before withdrawing")
     balance = await db.scalar(
@@ -431,16 +411,10 @@ async def quote_withdrawal(
         raise ValueError(
             "Withdrawal amount is too small to apply the 10% fee at supported precision"
         )
-    fee_quote = (
-        NetworkFeeQuote(
-            native_fee_amount=Decimal("0"),
-            withdrawal_fee_amount=Decimal("0"),
-            withdrawal_currency=selected_currency,
-        )
-        if selected_currency == "XTR"
-        else await payout_adapter.quote_network_fee(
-            selected_currency, requested_amount - fee
-        )
+    fee_quote = await payout_adapter.quote_network_fee(
+        selected_currency,
+        requested_amount - fee,
+        destination=user.wallet_address,
     )
     if (
         fee_quote.withdrawal_currency != selected_currency
@@ -450,12 +424,6 @@ async def quote_withdrawal(
         or not fee_quote.withdrawal_fee_amount.is_finite()
         or fee_quote.native_fee_amount < 0
         or fee_quote.withdrawal_fee_amount < 0
-        or (selected_currency == "USDT" and (
-            fee_quote.ton_usd_rate is None
-            or not isinstance(fee_quote.ton_usd_rate, Decimal)
-            or not fee_quote.ton_usd_rate.is_finite()
-            or fee_quote.ton_usd_rate <= 0
-        ))
     ):
         raise ValueError("Payout provider returned an invalid network-fee quote")
     native_fee_estimate = fee_quote.native_fee_amount.quantize(
@@ -474,8 +442,8 @@ async def quote_withdrawal(
         platform_fee=fee,
         network_fee_estimate=network_fee_estimate,
         native_network_fee_estimate=native_fee_estimate,
-        network_fee_currency="TON" if selected_currency != "XTR" else None,
-        ton_usd_rate=fee_quote.ton_usd_rate,
+        network_fee_currency="TON",
+        ton_usd_rate=None,
         payout_amount=payout,
         expires_at=now + timedelta(seconds=WITHDRAWAL_QUOTE_TTL_SECONDS),
     )
@@ -494,9 +462,7 @@ async def quote_withdrawal(
         "network_fee_estimate": str(quote.network_fee_estimate),
         "native_network_fee_estimate": str(quote.native_network_fee_estimate),
         "network_fee_currency": quote.network_fee_currency,
-        "ton_usd_rate": str(quote.ton_usd_rate) if quote.ton_usd_rate else None,
         "payout_amount": str(quote.payout_amount),
-        "manual_settlement": quote.currency == "XTR",
         "expires_at": _as_utc(quote.expires_at).isoformat(),
     }
 
@@ -539,15 +505,6 @@ async def request_withdrawal(
             raise ValueError("User is not registered")
         if not user.wallet_address:
             raise ValueError("Set a wallet address before withdrawing")
-        locked_slot = await db.scalar(
-            select(ServerSlot.id).where(
-                ServerSlot.user_id == user_id,
-                ServerSlot.clearance_ready_at > now,
-            ).limit(1)
-        )
-        if locked_slot is not None:
-            raise ValueError("Withdrawals are locked while a Stars slot is clearing")
-
         withdrawal = WithdrawalRequest(
             user_id=user_id,
             quote_id=quote.id,
@@ -558,9 +515,9 @@ async def request_withdrawal(
             network_fee_estimate=quote.network_fee_estimate,
             native_network_fee_estimate=quote.native_network_fee_estimate,
             network_fee_currency=quote.network_fee_currency,
-            ton_usd_rate=quote.ton_usd_rate,
+            ton_usd_rate=None,
             wallet_address_snapshot=user.wallet_address,
-            status="manual_review" if quote.currency == "XTR" else "queued",
+            status="queued",
             idempotency_key=idempotency_key,
         )
         db.add(withdrawal)
@@ -626,21 +583,7 @@ def _withdrawal_payload(withdrawal: WithdrawalRequest) -> dict[str, object]:
             else None
         ),
         "network_fee_currency": withdrawal.network_fee_currency,
-        "ton_usd_rate": (
-            str(withdrawal.ton_usd_rate) if withdrawal.ton_usd_rate else None
-        ),
         "payout_amount": str(withdrawal.payout_amount),
-        "settlement_currency": withdrawal.settlement_currency,
-        "settlement_amount": (
-            str(withdrawal.settlement_amount)
-            if withdrawal.settlement_amount is not None
-            else None
-        ),
-        "settlement_rate": (
-            str(withdrawal.settlement_rate)
-            if withdrawal.settlement_rate is not None
-            else None
-        ),
         "wallet_address": withdrawal.wallet_address_snapshot,
         "treasury_account": os.getenv("TREASURY_ACCOUNT", "Mint AI Treasury"),
         "tx_hash": withdrawal.tx_hash,
@@ -769,15 +712,7 @@ async def process_approved_withdrawals(
             processed += 1
             continue
         actual_fee_charge = payout.network_fee_amount
-        if withdrawal.currency == "USDT":
-            if payout.network_fee_currency != "TON" or withdrawal.ton_usd_rate is None:
-                withdrawal.status = "manual_review"
-                withdrawal.error_message = "Payout fee currency/rate cannot be reconciled"
-                await db.commit()
-                processed += 1
-                continue
-            actual_fee_charge *= withdrawal.ton_usd_rate
-        elif withdrawal.currency != "TON" or payout.network_fee_currency != "TON":
+        if withdrawal.currency != "TON" or payout.network_fee_currency != "TON":
             withdrawal.status = "manual_review"
             withdrawal.error_message = "Payout provider returned an unexpected network fee currency"
             await db.commit()
@@ -792,19 +727,31 @@ async def process_approved_withdrawals(
         actual_payout = payout.payout_amount.quantize(
             AMOUNT_QUANTUM, rounding=ROUND_DOWN
         )
-        if expected_payout <= 0 or actual_payout != expected_payout:
+        if expected_payout <= 0:
             withdrawal.status = "manual_review"
             withdrawal.tx_hash = payout.tx_hash
             withdrawal.network_fee_amount = payout.network_fee_amount
             withdrawal.network_fee_currency = payout.network_fee_currency
             withdrawal.payout_amount = actual_payout
-            withdrawal.error_message = (
-                "Payout amount does not reconcile to the actual network fee"
-            )
+            withdrawal.error_message = "Payout does not cover its reconciled fees"
             withdrawal.updated_at = utc_now()
             await db.commit()
             processed += 1
             continue
+        if actual_payout != expected_payout:
+            if actual_payout != withdrawal.payout_amount:
+                withdrawal.status = "manual_review"
+                withdrawal.tx_hash = payout.tx_hash
+                withdrawal.network_fee_amount = payout.network_fee_amount
+                withdrawal.network_fee_currency = payout.network_fee_currency
+                withdrawal.payout_amount = actual_payout
+                withdrawal.error_message = (
+                    "Payout amount differs from both the quote and actual-fee reconciliation"
+                )
+                withdrawal.updated_at = utc_now()
+                await db.commit()
+                processed += 1
+                continue
         withdrawal.status = "completed"
         withdrawal.tx_hash = payout.tx_hash
         withdrawal.network_fee_amount = payout.network_fee_amount
@@ -822,6 +769,29 @@ async def process_approved_withdrawals(
                 reference_id=withdrawal.id,
                 idempotency_key=f"withdrawal:network-fee:{withdrawal.id}",
                 telemetry={"blockchain_gas_fee_ton": payout.network_fee_amount},
+                allow_negative=True,
+            )
+        payout_variance = expected_payout - actual_payout
+        if payout_variance > 0:
+            await apply_ledger_delta(
+                db,
+                user_id=withdrawal.user_id,
+                currency=withdrawal.currency,
+                amount=payout_variance,
+                entry_type="WITHDRAWAL_FEE_ADJ",
+                reference_type="withdrawal_request",
+                reference_id=withdrawal.id,
+                idempotency_key=f"withdrawal:fee-adjustment:{withdrawal.id}",
+            )
+        elif payout_variance < 0:
+            await apply_treasury_ledger_delta(
+                db,
+                currency=withdrawal.currency,
+                amount=payout_variance,
+                entry_type="PAYOUT_VARIANCE",
+                reference_type="withdrawal_request",
+                reference_id=withdrawal.id,
+                idempotency_key=f"withdrawal:payout-variance:{withdrawal.id}",
                 allow_negative=True,
             )
         await record_financial_event(

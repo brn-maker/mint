@@ -1,57 +1,161 @@
-import hashlib
-import hmac
+import asyncio
+import json
+import logging
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+from typing import TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-class TonTransferEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    event_id: str = Field(min_length=1, max_length=128)
-    intent_id: str = Field(min_length=36, max_length=36)
-    tx_hash: str = Field(min_length=32, max_length=128)
-    tx_log_index: int = Field(ge=0)
-    amount: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
-    currency: str = Field(pattern="^(TON|USDT)$")
-    memo: str = Field(min_length=1, max_length=64)
-    to_address: str = Field(min_length=10, max_length=128)
-    token_master: str | None = Field(default=None, max_length=128)
-    confirmations: int = Field(ge=0)
-    network: str = Field(min_length=1, max_length=16)
+from models import PaymentIntent, utc_now
 
 
-class TonIndexerAdapter:
-    def __init__(self, webhook_secret: str, minimum_confirmations: int = 1) -> None:
-        self.webhook_secret = webhook_secret.encode("utf-8")
-        self.minimum_confirmations = minimum_confirmations
+logger = logging.getLogger(__name__)
+VERIFIER_SCRIPT = Path(__file__).with_name("ton_verifier.mjs")
+NANO_TON = Decimal("1000000000")
 
-    def verify_signature(self, body: bytes, supplied_signature: str) -> bool:
-        if not self.webhook_secret or not supplied_signature:
-            return False
-        digest = hmac.new(self.webhook_secret, body, hashlib.sha256).hexdigest()
-        signature = supplied_signature.removeprefix("sha256=").strip()
-        return hmac.compare_digest(digest, signature)
 
-    def parse_event(self, body: bytes) -> TonTransferEvent:
-        return TonTransferEvent.model_validate_json(body)
+class TonTransaction(TypedDict):
+    tx_hash: str
+    amount_nano: str
+    comment: str
+    incoming_bounced: bool
+    bounce_output: bool
 
-    def validate_event(
-        self,
-        event: TonTransferEvent,
-        *,
-        network: str,
-        deposit_address: str,
-        usdt_jetton_master: str,
-    ) -> None:
-        if event.network.lower() != network.lower():
-            raise ValueError("TON event is for the wrong network")
-        if event.confirmations < self.minimum_confirmations:
-            raise ValueError("TON transfer has not reached the required confirmations")
-        if event.to_address != deposit_address:
-            raise ValueError("TON transfer destination does not match the configured deposit address")
-        if event.currency == "USDT":
-            if not usdt_jetton_master or event.token_master != usdt_jetton_master:
-                raise ValueError("USDT transfer is not from the configured jetton master")
-        elif event.token_master is not None:
-            raise ValueError("Native TON transfer must not specify a jetton master")
+
+class TonVerifierError(RuntimeError):
+    pass
+
+
+async def scan_ton_transactions(since: datetime) -> list[TonTransaction]:
+    since_utc = (
+        since.replace(tzinfo=timezone.utc)
+        if since.tzinfo is None
+        else since.astimezone(timezone.utc)
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "node",
+            str(VERIFIER_SCRIPT),
+            str(int(since_utc.timestamp())),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=90)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
+    except (OSError, asyncio.TimeoutError) as exc:
+        raise TonVerifierError("TON transaction verifier could not complete") from exc
+    if process.returncode != 0:
+        raise TonVerifierError(
+            "TON transaction verifier rejected its configuration or failed to scan"
+        )
+    try:
+        records = json.loads(stdout)
+        if not isinstance(records, list):
+            raise TypeError("verifier output must be an array")
+        parsed: list[TonTransaction] = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise TypeError("transaction record must be an object")
+            if (
+                not isinstance(record.get("tx_hash"), str)
+                or not isinstance(record.get("amount_nano"), str)
+                or not isinstance(record.get("comment"), str)
+                or not isinstance(record.get("incoming_bounced"), bool)
+                or not isinstance(record.get("bounce_output"), bool)
+            ):
+                raise TypeError("transaction record has missing or invalid fields")
+            parsed.append({
+                "tx_hash": str(record["tx_hash"]),
+                "amount_nano": str(record["amount_nano"]),
+                "comment": str(record["comment"]),
+                "incoming_bounced": record["incoming_bounced"],
+                "bounce_output": record["bounce_output"],
+            })
+        return parsed
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise TonVerifierError("TON transaction verifier returned invalid data") from exc
+
+
+def find_matching_transaction(
+    intent: PaymentIntent, transactions: list[TonTransaction]
+) -> TonTransaction | None:
+    expected_nano = Decimal(intent.expected_amount) * NANO_TON
+    if expected_nano != expected_nano.to_integral_value():
+        raise ValueError("Payment amount cannot be represented in nanoTON")
+    for transaction in transactions:
+        if (
+            transaction.get("incoming_bounced", False)
+            or transaction.get("bounce_output", False)
+        ):
+            continue
+        if (
+            transaction["comment"] == intent.deposit_memo
+            and Decimal(transaction["amount_nano"]) == expected_nano
+        ):
+            return transaction
+    return None
+
+
+async def confirm_ton_transactions(
+    db: AsyncSession, transactions: list[TonTransaction]
+) -> int:
+    from engine import confirm_investment_from_payment
+
+    confirmed = 0
+    for transaction in transactions:
+        if (
+            transaction.get("incoming_bounced", False)
+            or transaction.get("bounce_output", False)
+        ):
+            continue
+        tx_hash = transaction["tx_hash"]
+        already_used = await db.scalar(
+            select(PaymentIntent.id).where(
+                PaymentIntent.chain == "TON",
+                PaymentIntent.tx_hash == tx_hash,
+                PaymentIntent.tx_log_index == 0,
+            )
+        )
+        if already_used is not None:
+            continue
+
+        amount = Decimal(transaction["amount_nano"]) / NANO_TON
+        intent = await db.scalar(
+            select(PaymentIntent).where(
+                PaymentIntent.status == "awaiting_payment",
+                PaymentIntent.expires_at > utc_now(),
+                PaymentIntent.currency == "TON",
+                PaymentIntent.deposit_memo == transaction["comment"],
+                PaymentIntent.expected_amount == amount,
+            )
+        )
+        if intent is None:
+            continue
+
+        try:
+            await confirm_investment_from_payment(
+                db,
+                intent.id,
+                tx_hash=tx_hash,
+                tx_log_index=0,
+                provider="ton",
+            )
+        except IntegrityError:
+            await db.rollback()
+            logger.exception("TON transaction %s was already claimed", tx_hash)
+            continue
+        except ValueError as exc:
+            logger.warning(
+                "TON payment intent %s was not confirmed: %s", intent.id, exc
+            )
+            continue
+        confirmed += 1
+    return confirmed

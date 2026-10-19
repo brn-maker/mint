@@ -1,0 +1,19 @@
+name: Keepalive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep the Render free instance awake
+        run: |
+          url="${{ vars.KEEPALIVE_URL }}"
+          if [ -n "$url" ]; then
+            curl -fsS --max-time 25 "$url" || true
+          else
+            echo "KEEPALIVE_URL variable is not set; skipping."
+          fi

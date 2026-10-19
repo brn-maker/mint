@@ -2,9 +2,12 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
+from sqlalchemy import select
+
 from config import (
     DIVIDEND_BATCH_INTERVAL_SECONDS,
     PAYMENT_EXPIRY_INTERVAL_SECONDS,
+    TON_PAYMENT_SCAN_INTERVAL_SECONDS,
     WITHDRAWAL_WORKER_INTERVAL_SECONDS,
 )
 from database import SessionLocal
@@ -13,7 +16,9 @@ from engine import (
     expire_stale_payment_intents,
     process_approved_withdrawals,
 )
+from models import PaymentIntent, utc_now
 from payments.payouts import get_payout_adapter
+from payments.ton import confirm_ton_transactions, scan_ton_transactions
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +56,31 @@ async def run_payment_workers() -> None:
         async with SessionLocal() as db:
             return await accrue_dividends_batch(db)
 
+    async def scan_ton_payments() -> int:
+        async with SessionLocal() as db:
+            oldest_intent = await db.scalar(
+                select(PaymentIntent.created_at)
+                .where(
+                    PaymentIntent.status == "awaiting_payment",
+                    PaymentIntent.currency == "TON",
+                    PaymentIntent.expires_at > utc_now(),
+                )
+                .order_by(PaymentIntent.created_at)
+                .limit(1)
+            )
+            if oldest_intent is None:
+                return 0
+            transactions = await scan_ton_transactions(oldest_intent)
+            return await confirm_ton_transactions(db, transactions)
+
     tasks = (
+        asyncio.create_task(
+            _run_periodically(
+                "scan-ton-payments",
+                TON_PAYMENT_SCAN_INTERVAL_SECONDS,
+                scan_ton_payments,
+            )
+        ),
         asyncio.create_task(
             _run_periodically(
                 "expire-payment-intents", PAYMENT_EXPIRY_INTERVAL_SECONDS, expire_intents

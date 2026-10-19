@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 import hmac
 import logging
 import os
@@ -20,15 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import (
     AUTO_CREATE_SCHEMA,
-    CRYPTO_DEPOSIT_ADDRESS,
     ENABLE_BACKGROUND_WORKERS,
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_WEBHOOK_PATH,
-    TELEGRAM_WEBHOOK_SECRET,
-    TON_INDEXER_WEBHOOK_SECRET,
-    TON_MIN_CONFIRMATIONS,
-    TON_NETWORK,
-    USDT_JETTON_MASTER,
 )
 from database import Base, engine, get_db
 from dividends import (
@@ -57,13 +52,8 @@ from models import (
 )
 from payments.service import build_client_payload, create_payment_intent
 from payments.payouts import PayoutRejected, get_payout_adapter
-from payments.stars import TelegramStarsAdapter, answer_pre_checkout_query
-from payments.ton import TonIndexerAdapter
-from pricing import (
-    PriceFeedError,
-    get_ton_usd_price,
-    public_server_listings,
-)
+from payments.ton import TonVerifierError, find_matching_transaction, scan_ton_transactions
+from pricing import public_server_listings
 from referrals import build_referral_link, generate_user_referral_code
 from rate_limit import rate_limit_sensitive
 from telegram_auth import TelegramAuthError, validate_telegram_init_data
@@ -119,12 +109,14 @@ class ProfileRequest(BaseModel):
 
 class PaymentIntentRequest(BaseModel):
     server_id: str = Field(min_length=1, max_length=32)
-    payment_method: Literal["stars", "crypto"]
-    currency: Literal["XTR", "TON", "USDT"]
 
 
 class ConfirmInvestmentRequest(BaseModel):
     intent_id: str = Field(min_length=36, max_length=36)
+
+
+class ValidatePaymentRequest(BaseModel):
+    transaction_boc: str = Field(min_length=1, max_length=100_000)
 
 
 class WithdrawalRequest(BaseModel):
@@ -133,16 +125,7 @@ class WithdrawalRequest(BaseModel):
 
 class WithdrawalQuoteRequest(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
-    currency: Literal["XTR", "TON", "USDT"]
-
-
-class ManualStarsSettlementRequest(BaseModel):
-    settlement_currency: Literal["TON", "USDT"]
-    settlement_amount: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
-    settlement_rate: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
-    ton_usd_rate: Decimal | None = Field(default=None, gt=0, max_digits=24, decimal_places=8)
-    network_fee_ton: Decimal = Field(ge=0, max_digits=24, decimal_places=8)
-    tx_hash: str = Field(min_length=8, max_length=128)
+    currency: Literal["TON"] = "TON"
 
 
 class NetworkFeeReconciliationRequest(BaseModel):
@@ -203,28 +186,63 @@ async def _get_or_create_user(
         referrer_id = referrer.id
 
     username = telegram_user.get("username") if telegram_user else None
-    user = User(
-        id=user_id,
-        username=str(username)[:64] if username else None,
-        referred_by=referrer_id,
-        referral_code=generate_user_referral_code(user_id),
+    for attempt in range(10):
+        referral_code = generate_user_referral_code(user_id, attempt)
+        code_in_use = await db.scalar(
+            select(User.id).where(User.referral_code == referral_code)
+        )
+        if code_in_use is not None:
+            continue
+
+        user = User(
+            id=user_id,
+            username=str(username)[:64] if username else None,
+            referred_by=referrer_id,
+            referral_code=referral_code,
+        )
+        db.add(user)
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            existing_user = await db.get(User, user_id)
+            if existing_user is not None:
+                return existing_user
+            code_in_use = await db.scalar(
+                select(User.id).where(User.referral_code == referral_code)
+            )
+            if code_in_use is not None:
+                continue
+            raise HTTPException(
+                status_code=409,
+                detail="Could not register user due to a database integrity conflict",
+            ) from exc
+        await db.refresh(user)
+        return user
+    raise HTTPException(
+        status_code=503,
+        detail="Could not allocate a unique referral code; retry registration",
     )
-    db.add(user)
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="The user or deterministic referral code already exists",
-        ) from exc
-    await db.refresh(user)
-    return user
 
 
 @app.get("/")
 async def dashboard_page() -> FileResponse:
     return FileResponse(FRONTEND_FILE)
+
+
+@app.get("/tonconnect-manifest.json")
+async def tonconnect_manifest(request: Request) -> dict[str, str]:
+    origin = str(request.base_url).rstrip("/")
+    return {
+        "url": origin,
+        "name": "Mint AI",
+        "iconUrl": f"{origin}/assets/mint-icon.svg",
+    }
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.get("/servers")
@@ -276,10 +294,14 @@ async def dashboard(
     )
 
     balances_result = await db.execute(
-        select(WalletBalance).where(WalletBalance.user_id == user_id).order_by(WalletBalance.currency)
+        select(WalletBalance)
+        .where(WalletBalance.user_id == user_id, WalletBalance.currency == "TON")
+        .order_by(WalletBalance.currency)
     )
     slots_result = await db.execute(
-        select(ServerSlot).where(ServerSlot.user_id == user_id).order_by(ServerSlot.created_at.desc())
+        select(ServerSlot)
+        .where(ServerSlot.user_id == user_id, ServerSlot.currency == "TON")
+        .order_by(ServerSlot.created_at.desc())
     )
     dividend_totals_result = await db.execute(
         select(LedgerEntry.reference_id, func.sum(LedgerEntry.amount))
@@ -287,6 +309,7 @@ async def dashboard(
             LedgerEntry.user_id == user_id,
             LedgerEntry.entry_type == "DIVIDEND",
             LedgerEntry.reference_type == "server_slot",
+            LedgerEntry.currency == "TON",
         )
         .group_by(LedgerEntry.reference_id)
     )
@@ -296,7 +319,10 @@ async def dashboard(
     }
     ledger_result = await db.execute(
         select(FinancialTelemetry)
-        .where(FinancialTelemetry.user_id == user_id)
+        .where(
+            FinancialTelemetry.user_id == user_id,
+            FinancialTelemetry.currency == "TON",
+        )
         .order_by(FinancialTelemetry.created_at.desc())
         .limit(50)
     )
@@ -360,11 +386,10 @@ async def dashboard(
     for slot in slot_models:
         pool = SERVER_POOLS[slot.server_pool]
         server_listing = next(
-            (listing for listing in public_server_listings(None) if listing["id"] == slot.server_id),
+            (listing for listing in public_server_listings() if listing["id"] == slot.server_id),
             None,
         )
         diagnostics = generate_diagnostics(slot.server_pool)
-        locked = slot.clearance_ready_at.replace(tzinfo=now.tzinfo) > now if slot.clearance_ready_at.tzinfo is None else slot.clearance_ready_at > now
         slot_rate = daily_dividend_percent(slot.server_id or "")
         slot_daily_amount = daily_dividend_amount(
             slot.server_id or "", Decimal(slot.net_investment)
@@ -383,8 +408,6 @@ async def dashboard(
                 "currency": slot.currency,
                 "gross_deposit": str(slot.gross_deposit),
                 "net_investment": str(slot.net_investment),
-                "clearance_ready_at": _as_utc(slot.clearance_ready_at).isoformat(),
-                "is_locked": locked,
                 "principal_is_locked": slot.principal_unlocked_at is None,
                 "principal_unlocked_at": (
                     _as_utc(slot.principal_unlocked_at).isoformat()
@@ -436,7 +459,6 @@ async def dashboard(
         "ghost_dividends": ghost_dividends,
         "slots": slots,
         "ledger": ledger,
-        "withdrawals_locked": any(slot["is_locked"] for slot in slots),
         "server_pools": [
             {
                 "id": pool_id,
@@ -450,22 +472,7 @@ async def dashboard(
 
 @app.get("/api/pricing")
 async def pricing() -> dict[str, object]:
-    try:
-        ton_usd = await get_ton_usd_price()
-        return {
-            "servers": public_server_listings(ton_usd),
-            "ton_usd": str(ton_usd),
-            "ton_quote_available": True,
-            "ton_quote_error": None,
-        }
-    except PriceFeedError:
-        logger.warning("Live TON/USD price quote unavailable")
-        return {
-            "servers": public_server_listings(None),
-            "ton_usd": None,
-            "ton_quote_available": False,
-            "ton_quote_error": "Live TON/USD quote is unavailable. Choose Stars or USDT, or try again later.",
-        }
+    return {"servers": public_server_listings(), "currency": "TON"}
 
 
 @app.post("/api/register")
@@ -513,22 +520,13 @@ async def create_intent(
     user_id, telegram_user = _telegram_user_id(request)
     await rate_limit_sensitive(request, user_id)
     await _get_or_create_user(db, user_id, telegram_user)
-    if body.payment_method == "stars" and body.currency != "XTR":
-        raise HTTPException(status_code=400, detail="Stars payments require XTR")
-    if body.payment_method == "crypto" and body.currency not in {"TON", "USDT"}:
-        raise HTTPException(status_code=400, detail="Crypto payments require TON or USDT")
     try:
         intent = await create_payment_intent(
             db,
             user_id=user_id,
             server_id=body.server_id,
-            payment_method=body.payment_method,
-            currency=body.currency,
             idempotency_key=idempotency_key,
-            bot_token=BOT_TOKEN,
         )
-    except PriceFeedError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return build_client_payload(intent)
@@ -548,6 +546,71 @@ async def get_payment_intent(
         select(ServerSlot.id).where(ServerSlot.payment_intent_id == intent.id)
     )
     return build_client_payload(intent, slot_id=slot_id)
+
+
+@app.post("/api/payment-intents/{intent_id}/validate")
+async def validate_payment_intent(
+    intent_id: str,
+    body: ValidatePaymentRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    user_id, _ = _telegram_user_id(request)
+    await rate_limit_sensitive(request, user_id)
+    try:
+        transaction_boc = base64.b64decode(body.transaction_boc, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid TON transaction BOC") from exc
+    if not transaction_boc.startswith(bytes.fromhex("b5ee9c72")):
+        raise HTTPException(status_code=422, detail="Invalid TON transaction BOC")
+    intent = await db.get(PaymentIntent, intent_id)
+    if intent is None or intent.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Payment intent not found")
+    if intent.status == "confirmed":
+        return {
+            "intent_id": intent.id,
+            "status": intent.status,
+            "tx_hash": intent.tx_hash,
+        }
+    if intent.status != "awaiting_payment":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Payment intent is not payable (status={intent.status})",
+        )
+
+    try:
+        transactions = await scan_ton_transactions(intent.created_at)
+    except TonVerifierError as exc:
+        logger.exception("TON payment validation failed for intent %s", intent.id)
+        raise HTTPException(
+            status_code=503,
+            detail="TON Testnet validation is temporarily unavailable",
+        ) from exc
+    transaction = find_matching_transaction(intent, transactions)
+    if transaction is None:
+        return {"intent_id": intent.id, "status": intent.status, "tx_hash": None}
+
+    try:
+        await confirm_investment_from_payment(
+            db,
+            intent.id,
+            tx_hash=transaction["tx_hash"],
+            tx_log_index=0,
+            provider="ton",
+        )
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This TON transaction has already been used",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "intent_id": intent.id,
+        "status": "confirmed",
+        "tx_hash": transaction["tx_hash"],
+    }
 
 
 @app.post("/api/investments")
@@ -573,127 +636,6 @@ async def create_investment(
     return result
 
 
-@app.post(TELEGRAM_WEBHOOK_PATH)
-async def telegram_webhook(
-    request: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    if not TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="Telegram webhook secret is not configured")
-    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(
-        x_telegram_bot_api_secret_token, TELEGRAM_WEBHOOK_SECRET
-    ):
-        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
-    if not BOT_TOKEN:
-        raise HTTPException(status_code=503, detail="Telegram bot token is not configured")
-    try:
-        update = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid Telegram update JSON") from exc
-
-    checkout = update.get("pre_checkout_query") if isinstance(update, dict) else None
-    if checkout:
-        try:
-            intent = await db.get(PaymentIntent, str(checkout["invoice_payload"]))
-            if intent is None:
-                raise ValueError("Payment intent was not found")
-            if int(checkout["from"]["id"]) != intent.user_id:
-                raise ValueError("Invoice belongs to a different Telegram user")
-            if intent.payment_method != "stars" or intent.currency != "XTR":
-                raise ValueError("Payment intent is not a Telegram Stars invoice")
-            if intent.status not in {"pending", "awaiting_payment"}:
-                raise ValueError("Payment intent is no longer payable")
-            if _as_utc(intent.expires_at) <= datetime.now(timezone.utc):
-                raise ValueError("Payment intent has expired")
-            TelegramStarsAdapter.validate_payment(
-                intent,
-                total_amount=int(checkout["total_amount"]),
-                currency=str(checkout["currency"]),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            await answer_pre_checkout_query(
-                str(checkout.get("id", "")),
-                BOT_TOKEN,
-                ok=False,
-                error_message=str(exc),
-            )
-            return {"ok": True, "pre_checkout_accepted": False}
-        await answer_pre_checkout_query(str(checkout["id"]), BOT_TOKEN, ok=True)
-        return {"ok": True, "pre_checkout_accepted": True}
-
-    message = update.get("message") if isinstance(update, dict) else None
-    successful_payment = message.get("successful_payment") if isinstance(message, dict) else None
-    if successful_payment:
-        try:
-            intent_id = str(successful_payment["invoice_payload"])
-            intent = await db.get(PaymentIntent, intent_id)
-            if intent is None:
-                raise ValueError("Payment intent was not found")
-            from_user = message.get("from", {})
-            if int(from_user["id"]) != intent.user_id:
-                raise ValueError("Successful payment belongs to a different Telegram user")
-            TelegramStarsAdapter.validate_payment(
-                intent,
-                total_amount=int(successful_payment["total_amount"]),
-                currency=str(successful_payment["currency"]),
-            )
-            charge_id = str(successful_payment["telegram_payment_charge_id"])
-            result = await confirm_investment_from_payment(
-                db,
-                intent.id,
-                external_payment_id=charge_id,
-                provider="stars",
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.warning("Rejected Telegram Stars payment update: %s", exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "investment": result}
-    return {"ok": True, "ignored": True}
-
-
-@app.post("/webhooks/ton/indexer")
-async def ton_indexer_webhook(
-    request: Request,
-    x_ton_signature: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    if not TON_INDEXER_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="TON indexer webhook is not configured")
-    adapter = TonIndexerAdapter(TON_INDEXER_WEBHOOK_SECRET, TON_MIN_CONFIRMATIONS)
-    body = await request.body()
-    if not adapter.verify_signature(body, x_ton_signature or ""):
-        raise HTTPException(status_code=401, detail="Invalid TON indexer signature")
-    try:
-        event = adapter.parse_event(body)
-        adapter.validate_event(
-            event,
-            network=TON_NETWORK,
-            deposit_address=CRYPTO_DEPOSIT_ADDRESS,
-            usdt_jetton_master=USDT_JETTON_MASTER,
-        )
-        intent = await db.get(PaymentIntent, event.intent_id)
-        if intent is None:
-            raise ValueError("Payment intent was not found")
-        if intent.payment_method != "crypto" or intent.currency != event.currency:
-            raise ValueError("Transfer currency does not match the payment intent")
-        if event.memo != intent.deposit_memo:
-            raise ValueError("Transfer memo does not match the payment intent")
-        if Decimal(event.amount) != Decimal(intent.expected_amount):
-            raise ValueError("Transfer amount does not match the quoted amount")
-        result = await confirm_investment_from_payment(
-            db,
-            intent.id,
-            tx_hash=event.tx_hash,
-            tx_log_index=event.tx_log_index,
-            provider="ton",
-        )
-    except ValueError as exc:
-        logger.warning("Rejected TON indexer event: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "investment": result}
-
-
 @app.post("/api/slots/{slot_id}/close")
 async def close_slot(
     slot_id: str,
@@ -704,13 +646,6 @@ async def close_slot(
     slot = await db.get(ServerSlot, slot_id)
     if slot is None or slot.user_id != user_id:
         raise HTTPException(status_code=404, detail="Server slot not found")
-    clearance_ready_at = (
-        slot.clearance_ready_at.replace(tzinfo=timezone.utc)
-        if slot.clearance_ready_at.tzinfo is None
-        else slot.clearance_ready_at
-    )
-    if clearance_ready_at > datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="A slot cannot be closed during its clearance period")
     if not slot.is_active:
         raise HTTPException(status_code=409, detail="Server slot is already historical")
     slot.is_active = False
@@ -787,21 +722,7 @@ async def get_withdrawal(
             else None
         ),
         "network_fee_currency": withdrawal.network_fee_currency,
-        "ton_usd_rate": (
-            str(withdrawal.ton_usd_rate) if withdrawal.ton_usd_rate else None
-        ),
         "payout_amount": str(withdrawal.payout_amount),
-        "settlement_currency": withdrawal.settlement_currency,
-        "settlement_amount": (
-            str(withdrawal.settlement_amount)
-            if withdrawal.settlement_amount is not None
-            else None
-        ),
-        "settlement_rate": (
-            str(withdrawal.settlement_rate)
-            if withdrawal.settlement_rate is not None
-            else None
-        ),
         "tx_hash": withdrawal.tx_hash,
         "error_message": withdrawal.error_message,
     }
@@ -849,86 +770,6 @@ async def list_manual_withdrawals(
     }
 
 
-@app.post("/admin/withdrawals/{withdrawal_id}/settle")
-async def settle_manual_stars_withdrawal(
-    withdrawal_id: str,
-    body: ManualStarsSettlementRequest,
-    x_admin_token: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, object]:
-    _require_admin_token(x_admin_token)
-    withdrawal = await db.get(WithdrawalRequestModel, withdrawal_id)
-    if withdrawal is None or withdrawal.currency != "XTR":
-        raise HTTPException(status_code=404, detail="Manual Stars withdrawal not found")
-    if withdrawal.status != "manual_review":
-        raise HTTPException(status_code=409, detail="Withdrawal is not awaiting manual settlement")
-    if body.settlement_currency == "USDT" and body.ton_usd_rate is None:
-        raise HTTPException(
-            status_code=422,
-            detail="A TON/USD rate is required to account for USDT payout gas",
-        )
-    gas_in_settlement_currency = (
-        body.network_fee_ton * body.ton_usd_rate
-        if body.settlement_currency == "USDT" and body.ton_usd_rate is not None
-        else body.network_fee_ton
-    )
-    expected_settlement = (
-        withdrawal.payout_amount * body.settlement_rate
-        - gas_in_settlement_currency
-    ).quantize(Decimal("0.00000001"))
-    if expected_settlement <= 0 or body.settlement_amount != expected_settlement:
-        raise HTTPException(
-            status_code=422,
-            detail="Settlement amount must equal the converted Stars balance less actual network gas",
-        )
-    if body.network_fee_ton > 0:
-        try:
-            await apply_treasury_ledger_delta(
-                db,
-                currency="TON",
-                amount=-body.network_fee_ton,
-                entry_type="NETWORK_FEE",
-                reference_type="withdrawal_request",
-                reference_id=withdrawal.id,
-                idempotency_key=f"withdrawal:network-fee:{withdrawal.id}",
-                telemetry={"blockchain_gas_fee_ton": body.network_fee_ton},
-                allow_negative=True,
-            )
-        except LedgerError as exc:
-            await db.rollback()
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    withdrawal.settlement_currency = body.settlement_currency
-    withdrawal.settlement_amount = body.settlement_amount
-    withdrawal.settlement_rate = body.settlement_rate
-    withdrawal.ton_usd_rate = body.ton_usd_rate
-    withdrawal.network_fee_amount = body.network_fee_ton
-    withdrawal.network_fee_currency = "TON"
-    withdrawal.tx_hash = body.tx_hash
-    withdrawal.status = "completed"
-    withdrawal.error_message = None
-    withdrawal.updated_at = datetime.now(timezone.utc)
-    await record_financial_event(
-        db,
-        user_id=withdrawal.user_id,
-        event_type="WITHDRAWAL",
-        currency=body.settlement_currency,
-        gross_amount=body.settlement_amount,
-        reference_type="manual_withdrawal_payout",
-        reference_id=withdrawal.id,
-        tx_hash=body.tx_hash,
-    )
-    await db.commit()
-    return {
-        "withdrawal_id": withdrawal.id,
-        "status": withdrawal.status,
-        "settlement_currency": withdrawal.settlement_currency,
-        "settlement_amount": str(withdrawal.settlement_amount),
-        "network_fee_amount": str(withdrawal.network_fee_amount),
-        "network_fee_currency": withdrawal.network_fee_currency,
-        "tx_hash": withdrawal.tx_hash,
-    }
-
-
 @app.post("/admin/withdrawals/{withdrawal_id}/reconcile-network-fee")
 async def reconcile_withdrawal_network_fee(
     withdrawal_id: str,
@@ -940,7 +781,7 @@ async def reconcile_withdrawal_network_fee(
     withdrawal = await db.get(WithdrawalRequestModel, withdrawal_id)
     if (
         withdrawal is None
-        or withdrawal.currency not in {"TON", "USDT"}
+        or withdrawal.currency != "TON"
         or withdrawal.status != "manual_review"
         or not withdrawal.tx_hash
     ):
@@ -948,10 +789,6 @@ async def reconcile_withdrawal_network_fee(
             status_code=404, detail="Payout requiring network-fee reconciliation not found"
         )
     actual_charge = body.network_fee_ton
-    if withdrawal.currency == "USDT":
-        if withdrawal.ton_usd_rate is None or withdrawal.ton_usd_rate <= 0:
-            raise HTTPException(status_code=409, detail="Withdrawal has no valid TON/USD quote")
-        actual_charge *= withdrawal.ton_usd_rate
     actual_charge = actual_charge.quantize(Decimal("0.00000001"))
     expected_payout = (
         withdrawal.gross_amount - withdrawal.platform_fee - actual_charge
@@ -1012,7 +849,9 @@ async def admin_metrics(
     _require_admin_token(x_admin_token)
 
     users = await db.scalar(select(func.count(User.id))) or 0
-    slots = await db.scalar(select(func.count(ServerSlot.id))) or 0
+    slots = await db.scalar(
+        select(func.count(ServerSlot.id)).where(ServerSlot.currency == "TON")
+    ) or 0
     currency_metrics_result = await db.execute(
         select(
             FinancialTelemetry.currency,
@@ -1035,6 +874,7 @@ async def admin_metrics(
                 func.sum(FinancialTelemetry.blockchain_gas_fee_ton), 0
             ).label("network_gas_fee_ton"),
         )
+        .where(FinancialTelemetry.currency == "TON")
         .group_by(FinancialTelemetry.currency)
         .order_by(FinancialTelemetry.currency)
     )
@@ -1068,7 +908,7 @@ async def live_wheel(websocket: WebSocket) -> None:
         while True:
             username = "anon" + str(random.randint(100, 999))
             amount = Decimal(random.choice([250, 500, 750, 1200]))
-            currency = random.choice(["XTR", "TON", "USDT"])
+            currency = "TON"
             await websocket.send_json(
                 {"message": format_commission_event(username, amount, currency)}
             )

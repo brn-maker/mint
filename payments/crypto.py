@@ -3,10 +3,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from config import (
-    CRYPTO_DEPOSIT_ADDRESS,
-    TON_INDEXER_WEBHOOK_SECRET,
+    APP_WALLET_MNEMONIC,
+    TON_DEPOSIT_ADDRESS,
+    TON_API_ENDPOINT,
+    TON_API_KEY,
     TON_NETWORK,
-    USDT_JETTON_MASTER,
 )
 from models import PaymentIntent
 
@@ -23,26 +24,26 @@ def build_deposit_memo(intent: PaymentIntent) -> str:
 
 def build_crypto_instructions(intent: PaymentIntent) -> dict[str, object]:
     configured = bool(
-        CRYPTO_DEPOSIT_ADDRESS
-        and TON_INDEXER_WEBHOOK_SECRET
-        and (intent.currency != "USDT" or USDT_JETTON_MASTER)
+        TON_DEPOSIT_ADDRESS
+        and TON_API_ENDPOINT
+        and TON_API_KEY
+        and APP_WALLET_MNEMONIC
+        and TON_NETWORK == "testnet"
     )
     if not configured:
         return {
             "deposit_address": None,
             "memo": build_deposit_memo(intent),
             "network": TON_NETWORK,
-            "usdt_jetton_master": USDT_JETTON_MASTER or None,
             "configured": False,
-            "note": "Configure the deposit address, signed TON indexer webhook, and USDT jetton master (for USDT) before sending funds.",
+            "note": "Configure the TON testnet RPC and receiving wallet before sending funds.",
         }
     return {
-        "deposit_address": CRYPTO_DEPOSIT_ADDRESS,
+        "deposit_address": TON_DEPOSIT_ADDRESS,
         "memo": build_deposit_memo(intent),
         "amount": str(intent.expected_amount),
-        "currency": intent.currency,
+        "currency": "TON",
         "network": TON_NETWORK,
-        "usdt_jetton_master": USDT_JETTON_MASTER or None if intent.currency == "USDT" else None,
         "quote_expires_at": _iso_utc(intent.quote_expires_at),
         "configured": True,
     }

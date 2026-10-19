@@ -1,6 +1,12 @@
 import unittest
+import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://test:test@localhost:5432/test",
+)
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -72,12 +78,12 @@ class ReferralDividendLedgerTest(unittest.IsolatedAsyncioTestCase):
                         server_id="h100-node-01",
                         pricing_tier_id="tier-300",
                         server_pool="NVIDIA-H100-POOL-A",
-                        payment_method="stars",
-                        currency="XTR",
-                        expected_amount=300,
+                        payment_method="crypto",
+                        currency="TON",
+                        expected_amount=Decimal("4.50"),
                         quote_expires_at=start,
                         status="confirmed",
-                        provider="stars",
+                        provider="ton",
                         expires_at=start + timedelta(days=1),
                     )
                 )
@@ -87,11 +93,11 @@ class ReferralDividendLedgerTest(unittest.IsolatedAsyncioTestCase):
                 server_id="h100-node-01",
                 pricing_tier_id="tier-300",
                 server_pool="NVIDIA-H100-POOL-A",
-                payment_method="stars",
-                currency="XTR",
+                payment_method="crypto",
+                currency="TON",
                 gross_deposit=100,
                 net_investment=100,
-                clearance_ready_at=start + timedelta(days=21),
+                clearance_ready_at=start,
                 status="active",
                 is_active=True,
                 created_at=start - timedelta(days=1),
@@ -135,12 +141,12 @@ class ReferralDividendLedgerTest(unittest.IsolatedAsyncioTestCase):
                         server_id="h100-node-01",
                         pricing_tier_id="tier-300",
                         server_pool="NVIDIA-H100-POOL-A",
-                        payment_method="stars",
-                        currency="XTR",
-                        expected_amount=300,
+                        payment_method="crypto",
+                        currency="TON",
+                        expected_amount=Decimal("4.50"),
                         quote_expires_at=start,
                         status="confirmed",
-                        provider="stars",
+                        provider="ton",
                         expires_at=start + timedelta(days=1),
                     )
                 )

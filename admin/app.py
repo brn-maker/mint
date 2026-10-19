@@ -166,8 +166,7 @@ withdrawal_heading.subheader("Withdrawal operations")
 if refresh_column.button("Refresh", width="stretch"):
     st.rerun()
 st.caption(
-    "Only withdrawals awaiting manual review appear here. XTR requests can be settled manually; "
-    "crypto payouts in review can have actual network fees reconciled."
+    "Only TON withdrawals awaiting payout reconciliation appear here."
 )
 
 try:
@@ -193,7 +192,7 @@ for withdrawal in withdrawals:
         detail_columns = st.columns(3)
         detail_columns[0].write(f"**Withdrawal ID**  \n`{withdrawal_id}`")
         detail_columns[1].write(
-            f"**Payout before settlement**  \n"
+            f"**Quoted payout**  \n"
             f"{withdrawal.get('payout_amount_before_settlement', '—')} {currency}"
         )
         detail_columns[2].write(
@@ -202,84 +201,9 @@ for withdrawal in withdrawals:
         st.write(f"**Wallet:** `{withdrawal.get('wallet_address', '—')}`")
         st.write(f"**Requested:** {withdrawal.get('created_at', '—')}")
 
-        if currency == "XTR":
+        if currency == "TON":
             st.caption(
-                "Settlement must equal the pre-settlement payout multiplied by the conversion "
-                "rate, less actual network gas (converted to USDT when applicable). The API "
-                "checks this calculation before recording the payout."
-            )
-            with st.form(f"settle-{withdrawal_id}"):
-                st.markdown("**Record manual Stars payout**")
-                settlement_currency = st.selectbox(
-                    "Payout currency",
-                    options=["TON", "USDT"],
-                    key=f"settlement-currency-{withdrawal_id}",
-                )
-                settlement_rate = st.text_input(
-                    "Conversion rate (payout currency per XTR)",
-                    placeholder="Required",
-                    key=f"settlement-rate-{withdrawal_id}",
-                )
-                settlement_amount = st.text_input(
-                    "Actual payout amount",
-                    placeholder="Required",
-                    key=f"settlement-amount-{withdrawal_id}",
-                )
-                ton_usd_rate = None
-                if settlement_currency == "USDT":
-                    ton_usd_rate = st.text_input(
-                        "TON/USD rate used for gas",
-                        placeholder="Required",
-                        key=f"ton-usd-{withdrawal_id}",
-                    )
-                network_fee_ton = st.text_input(
-                    "Actual network fee (TON)",
-                    value="0",
-                    key=f"network-fee-{withdrawal_id}",
-                )
-                tx_hash = st.text_input(
-                    "Payout transaction hash",
-                    max_chars=128,
-                    key=f"tx-hash-{withdrawal_id}",
-                )
-                submitted = st.form_submit_button("Record settlement", type="primary")
-            if submitted:
-                if len(tx_hash.strip()) < 8:
-                    st.error("Enter a transaction hash of at least 8 characters.")
-                    continue
-                try:
-                    payload: dict[str, Any] = {
-                        "settlement_currency": settlement_currency,
-                        "settlement_amount": decimal_field(
-                            settlement_amount, "actual payout amount"
-                        ),
-                        "settlement_rate": decimal_field(
-                            settlement_rate, "conversion rate"
-                        ),
-                        "network_fee_ton": decimal_field(
-                            network_fee_ton, "network fee", allow_zero=True
-                        ),
-                        "tx_hash": tx_hash.strip(),
-                    }
-                    if ton_usd_rate is not None:
-                        payload["ton_usd_rate"] = decimal_field(
-                            ton_usd_rate, "TON/USD rate"
-                        )
-                    api_request(
-                        "POST",
-                        f"/admin/withdrawals/{withdrawal_id}/settle",
-                        active_api_url,
-                        active_token,
-                        payload,
-                    )
-                    st.session_state["admin_flash"] = "Stars withdrawal settlement recorded."
-                    st.rerun()
-                except AdminApiError as exc:
-                    show_api_error(exc)
-        elif currency in {"TON", "USDT"}:
-            st.caption(
-                "Reconciled payout must equal gross amount minus the platform fee and actual "
-                "network gas. For USDT, TON gas is converted using the withdrawal's saved TON/USD rate."
+                "The reconciled payout must equal the gross amount less the platform fee and actual TON network fee."
             )
             with st.form(f"reconcile-{withdrawal_id}"):
                 st.markdown("**Reconcile actual crypto payout and gas**")
@@ -320,4 +244,4 @@ for withdrawal in withdrawals:
                 except AdminApiError as exc:
                     show_api_error(exc)
         else:
-            st.warning(f"No admin action is available for currency {currency!r}.")
+            st.warning(f"Legacy {currency!r} withdrawals cannot be settled by the TON-only flow.")

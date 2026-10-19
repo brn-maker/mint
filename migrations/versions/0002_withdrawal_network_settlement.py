@@ -1,4 +1,4 @@
-"""Add network-fee quotes and manual Stars withdrawal settlement fields."""
+"""Add network-fee quotes and withdrawal settlement fields."""
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect

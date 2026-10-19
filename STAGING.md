@@ -1,48 +1,15 @@
-# Mint AI staging rehearsal
+# Supabase staging
 
-This is a local staging rehearsal for the demo backend. It uses a separate SQLite database and synthetic accounts. It does not connect a wallet, send funds, or contact Telegram's payment API. Keep it separate from any database or credentials that contain real user or payment data.
+Use a separate Supabase project (or an isolated branch/database) for staging. Never point a staging deployment or seed data at the production project.
 
-## 1. Create the staging accounts
+1. Copy the staging project's PostgreSQL connection string into the staging service's `DATABASE_URL` environment setting, formatted for async SQLAlchemy/asyncpg.
+2. Set `AUTO_CREATE_SCHEMA=false`; deploy the API so its build step runs `alembic upgrade head`.
+3. Use a separate Telegram bot and Mini App, with staging values for `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_MINI_APP_SHORT_NAME`, and `REFERRAL_SALT`.
+4. Keep demo auth/payments isolated to staging. Do not seed balances intended to look like real funds.
+5. Set `TON_NETWORK=testnet` and configure the dedicated testnet wallet's `TON_DEPOSIT_ADDRESS`, `TON_API_ENDPOINT`, `TON_API_KEY`, and `APP_WALLET_MNEMONIC`. Test a confirmed testnet deposit with the exact comment shown for an intent, then verify referral rewards. Never use a mainnet mnemonic or send mainnet funds.
 
-From the project folder, run:
-
-```bash
-.venv/bin/python scripts/seed_staging_users.py \
-  --database-url 'sqlite+aiosqlite:////tmp/mintai-staging.db'
-```
-
-The seeder refuses non-SQLite databases and SQLite filenames without `staging` in the name. It uses stable IDs, labels every account `stage_*`, never deletes rows, and is safe to rerun against the same staging file. The five demo IDs are printed at the end.
-
-| Account | What to inspect |
-| --- | --- |
-| `dashboard` | Empty dashboard and server catalog |
-| `withdrawals` | XTR, TON, and USDT balances with a sample payout address |
-| `stars_hold` | A Stars slot still inside its 21-day clearance period |
-| `five_referrals` | Five paid referrals; the dashboard refresh creates the first referral dividend window |
-| `fifty_referrals` | Fifty paid referrals and a locked-principal slot; the dashboard refresh unlocks that principal once |
-
-The referral fixtures are simulated confirmed intents, not actual payment events. Their purpose is to load repeatable account states into the UI.
-
-## 2. Start the app against that database
-
-Use a separate terminal in the project folder:
-
-```bash
-DATABASE_URL='sqlite+aiosqlite:////tmp/mintai-staging.db' \
-ALLOW_DEMO_AUTH=true \
-ALLOW_DEMO_PAYMENTS=true \
-ENABLE_BACKGROUND_WORKERS=false \
-.venv/bin/uvicorn main:app --reload
-```
-
-Open `http://127.0.0.1:8000/?demo_user_id=900000002` and replace the ID with one printed by the seeder to view another account. Worker processing is disabled here so test balances and queued payouts do not change in the background. The app still uses its configured demo payout adapter if a withdrawal is submitted; that adapter records simulated outcomes only.
-
-## 3. Run the bug-hunt checks
+Regression tests use fresh in-memory SQLite databases only as test fixtures; the application itself requires PostgreSQL and does not connect to a local SQLite database.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
-
-The existing dividend tests and `test_staging_bug_hunt.py` use fresh in-memory SQLite databases. They check duplicate payment confirmation, one-time referral commissions, ledger idempotency and overdraft rejection, referral milestones and principal unlock, Stars clearance holds, single-use withdrawal quotes, simulated settlement, payout failure refunds, Telegram init-data signatures, and TON webhook signatures/network validation.
-
-These checks validate the implemented demo rules. Passing them does not certify live-money readiness: the app still needs real provider integrations, deployment-specific secrets and webhook configuration, operational monitoring, and an independent security/accounting review before handling real funds.

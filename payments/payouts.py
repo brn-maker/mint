@@ -4,8 +4,13 @@ from typing import Protocol
 
 from config import (
     ALLOW_DEMO_PAYMENTS,
+    APP_WALLET_MNEMONIC,
     DEMO_TON_GAS_FEE_ESTIMATE,
-    DEMO_TON_USD_ESTIMATE,
+    TON_API_ENDPOINT,
+    TON_API_KEY,
+    TON_DEPOSIT_ADDRESS,
+    TON_NETWORK,
+    TON_TESTNET_PAYOUTS_ENABLED,
 )
 from models import WithdrawalRequest
 
@@ -32,12 +37,15 @@ class NetworkFeeQuote:
     native_fee_amount: Decimal
     withdrawal_fee_amount: Decimal
     withdrawal_currency: str
-    ton_usd_rate: Decimal | None = None
 
 
 class PayoutAdapter(Protocol):
     async def quote_network_fee(
-        self, currency: str, payout_amount: Decimal
+        self,
+        currency: str,
+        payout_amount: Decimal,
+        *,
+        destination: str | None = None,
     ) -> NetworkFeeQuote: ...
 
     async def send(
@@ -47,24 +55,23 @@ class PayoutAdapter(Protocol):
 
 class SimulatedPayoutAdapter:
     async def quote_network_fee(
-        self, currency: str, payout_amount: Decimal
+        self,
+        currency: str,
+        payout_amount: Decimal,
+        *,
+        destination: str | None = None,
     ) -> NetworkFeeQuote:
+        if currency != "TON":
+            raise ValueError("Payouts support TON only")
         native_fee = DEMO_TON_GAS_FEE_ESTIMATE
-        if currency == "TON":
-            return NetworkFeeQuote(native_fee, native_fee, currency)
-        if currency == "USDT":
-            ton_usd = DEMO_TON_USD_ESTIMATE
-            return NetworkFeeQuote(native_fee, native_fee * ton_usd, currency, ton_usd)
-        raise ValueError("Simulated crypto payouts support TON and USDT only")
+        return NetworkFeeQuote(native_fee, native_fee, currency)
 
     async def send(
         self, withdrawal: WithdrawalRequest, *, idempotency_key: str
     ) -> PayoutResult:
+        if withdrawal.currency != "TON":
+            raise PayoutRejected("Payouts support TON only")
         actual_fee_charge = withdrawal.native_network_fee_estimate
-        if withdrawal.currency == "USDT":
-            if withdrawal.ton_usd_rate is None:
-                raise PayoutRejected("USDT payout is missing its TON/USD quote snapshot")
-            actual_fee_charge *= withdrawal.ton_usd_rate
         actual_payout = (
             withdrawal.gross_amount - withdrawal.platform_fee - actual_fee_charge
         )
@@ -78,17 +85,40 @@ class SimulatedPayoutAdapter:
 
 class UnconfiguredPayoutAdapter:
     async def quote_network_fee(
-        self, currency: str, payout_amount: Decimal
+        self,
+        currency: str,
+        payout_amount: Decimal,
+        *,
+        destination: str | None = None,
     ) -> NetworkFeeQuote:
-        raise PayoutRejected(
-            "No live payout and network-fee quote provider is configured"
-        )
+        raise PayoutRejected("No live TON payout and network-fee quote provider is configured")
 
     async def send(
         self, withdrawal: WithdrawalRequest, *, idempotency_key: str
     ) -> PayoutResult:
-        raise PayoutRejected("No live payout provider is configured; funds were refunded")
+        raise PayoutRejected("No live TON payout provider is configured; funds were refunded")
 
 
 def get_payout_adapter() -> PayoutAdapter:
+    if TON_TESTNET_PAYOUTS_ENABLED:
+        if ALLOW_DEMO_PAYMENTS:
+            raise RuntimeError(
+                "Disable ALLOW_DEMO_PAYMENTS before enabling testnet TON payouts"
+            )
+        if TON_NETWORK != "testnet":
+            raise RuntimeError("TON payouts are restricted to TON_NETWORK=testnet")
+        if not all(
+            (
+                TON_API_ENDPOINT,
+                TON_API_KEY,
+                APP_WALLET_MNEMONIC,
+                TON_DEPOSIT_ADDRESS,
+            )
+        ):
+            raise RuntimeError(
+                "Testnet TON payouts require the configured RPC, key, mnemonic, and wallet address"
+            )
+        from payments.ton_payout import TonTestnetPayoutAdapter
+
+        return TonTestnetPayoutAdapter()
     return SimulatedPayoutAdapter() if ALLOW_DEMO_PAYMENTS else UnconfiguredPayoutAdapter()

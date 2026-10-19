@@ -1,5 +1,4 @@
 import os
-from datetime import timedelta
 from decimal import Decimal
 
 from dotenv import load_dotenv
@@ -10,16 +9,21 @@ REFERRAL_COMMISSION_RATE = Decimal(os.getenv("REFERRAL_COMMISSION_RATE", "0.30")
 WITHDRAWAL_FEE_RATE = Decimal(os.getenv("WITHDRAWAL_FEE_RATE", "0.10"))
 AMOUNT_QUANTUM = Decimal("0.00000001")
 
-STARS_CLEARANCE_DAYS = int(os.getenv("STARS_CLEARANCE_DAYS", "21"))
-STARS_CLEARANCE_PERIOD = timedelta(days=STARS_CLEARANCE_DAYS)
-
 PAYMENT_QUOTE_MINUTES = int(os.getenv("PAYMENT_QUOTE_MINUTES", "30"))
 PAYMENT_INTENT_TTL_MINUTES = int(os.getenv("PAYMENT_INTENT_TTL_MINUTES", "60"))
 WITHDRAWAL_QUOTE_TTL_SECONDS = int(os.getenv("WITHDRAWAL_QUOTE_TTL_SECONDS", "300"))
 
-CRYPTO_DEPOSIT_ADDRESS = os.getenv("CRYPTO_DEPOSIT_ADDRESS", "").strip()
-USDT_JETTON_MASTER = os.getenv("USDT_JETTON_MASTER", "").strip()
-TON_NETWORK = os.getenv("TON_NETWORK", "mainnet")
+TON_DEPOSIT_ADDRESS = os.getenv("TON_DEPOSIT_ADDRESS", "").strip()
+TON_NETWORK = os.getenv("TON_NETWORK", "testnet").strip().lower()
+TON_API_ENDPOINT = os.getenv("TON_API_ENDPOINT", "").strip()
+TON_API_KEY = os.getenv("TON_API_KEY", "").strip()
+APP_WALLET_MNEMONIC = os.getenv("APP_WALLET_MNEMONIC", "").strip()
+TON_TESTNET_PAYOUTS_ENABLED = (
+    os.getenv("TON_TESTNET_PAYOUTS_ENABLED", "false").strip().lower() == "true"
+)
+TON_PAYMENT_SCAN_INTERVAL_SECONDS = float(
+    os.getenv("TON_PAYMENT_SCAN_INTERVAL_SECONDS", "10")
+)
 
 ALLOW_DEMO_PAYMENTS = os.getenv(
     "ALLOW_DEMO_PAYMENTS",
@@ -35,12 +39,6 @@ WITHDRAWAL_PROCESSING_STALE_SECONDS = int(os.getenv("WITHDRAWAL_PROCESSING_STALE
 DEMO_TON_GAS_FEE_ESTIMATE = Decimal(
     os.getenv("DEMO_TON_GAS_FEE_ESTIMATE", "0.005")
 )
-DEMO_TON_USD_ESTIMATE = Decimal(os.getenv("DEMO_TON_USD_ESTIMATE", "5.0"))
 AUTO_CREATE_SCHEMA = os.getenv("AUTO_CREATE_SCHEMA", "false").lower() == "true"
 
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TON_INDEXER_WEBHOOK_SECRET = os.getenv("TON_INDEXER_WEBHOOK_SECRET", "").strip()
-TON_MIN_CONFIRMATIONS = int(os.getenv("TON_MIN_CONFIRMATIONS", "1"))
-TELEGRAM_WEBHOOK_PATH = os.getenv("TELEGRAM_WEBHOOK_PATH", "/webhooks/telegram")

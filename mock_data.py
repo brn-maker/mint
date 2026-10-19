@@ -48,5 +48,4 @@ def generate_diagnostics(server_pool: str) -> dict[str, object]:
 def format_commission_event(username: str, amount: Decimal, currency: str) -> str:
     handle = username.lstrip("@") if username else "anon" + str(random.randint(100, 999))
     formatted_amount = f"{amount:,.0f}" if amount == amount.to_integral_value() else f"{amount:,.2f}"
-    currency_label = "Stars" if currency == "XTR" else currency
-    return f"⚡ User @{handle} just banked {formatted_amount} {currency_label} in upfront commissions!"
+    return f"⚡ User @{handle} just banked {formatted_amount} {currency} in upfront commissions!"
