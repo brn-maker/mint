@@ -1,10 +1,13 @@
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import logging
 import os
 import random
+import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -54,6 +57,7 @@ from models import (
 from payments.service import build_client_payload, create_payment_intent
 from payments.payouts import PayoutRejected, get_payout_adapter
 from payments.ton import TonVerifierError, find_matching_transaction, scan_ton_transactions
+from payments.ton_proof import TonProofError, verify_ton_proof
 from pricing import public_server_listings
 from referrals import build_referral_link, generate_user_referral_code
 from rate_limit import rate_limit_sensitive
@@ -520,6 +524,90 @@ async def update_profile(
     user.wallet_address = body.wallet_address
     await db.commit()
     return {"wallet_address": user.wallet_address}
+
+
+PROOF_TOKEN_TTL_SECONDS = 600
+
+
+class WalletProofVerifyRequest(BaseModel):
+    address: str = Field(min_length=10, max_length=128)
+    public_key: str = Field(min_length=64, max_length=64)
+    proof: dict[str, object] = Field(...)
+    token: str = Field(min_length=1, max_length=512)
+    domain: str = Field(min_length=1, max_length=253)
+    network: str = Field(default="-3", max_length=8)
+
+
+def _proof_secret() -> str:
+    return os.getenv("ADMIN_TOKEN", "") or os.getenv("REFERRAL_SALT", "")
+
+
+def _sign_proof_token(user_id: int, payload: str, expiry: int) -> str:
+    secret = _proof_secret().encode()
+    message = f"{user_id}:{payload}:{expiry}".encode()
+    signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    return f"{user_id}:{payload}:{expiry}:{signature}"
+
+
+def _verify_proof_token(token: str, user_id: int, payload: str) -> bool:
+    try:
+        parts = token.split(":")
+        token_user_id = int(parts[0])
+        token_payload = parts[1]
+        token_expiry = int(parts[2])
+        token_signature = parts[3]
+    except (ValueError, IndexError):
+        return False
+    if token_user_id != user_id or token_payload != payload:
+        return False
+    if int(time.time()) > token_expiry:
+        return False
+    secret = _proof_secret().encode()
+    message = f"{token_user_id}:{token_payload}:{token_expiry}".encode()
+    expected = hmac.new(secret, message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, token_signature)
+
+
+@app.post("/api/wallet-proof/challenge")
+async def wallet_proof_challenge(request: Request) -> dict[str, object]:
+    user_id, _ = _telegram_user_id(request)
+    payload = secrets.token_hex(16)
+    expiry = int(time.time()) + PROOF_TOKEN_TTL_SECONDS
+    token = _sign_proof_token(user_id, payload, expiry)
+    return {"payload": payload, "token": token, "expires_at": expiry}
+
+
+@app.post("/api/wallet-proof/verify")
+async def wallet_proof_verify(
+    body: WalletProofVerifyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    user_id, _ = _telegram_user_id(request)
+    proof = body.proof
+    payload = str(proof.get("payload", ""))
+    if not _verify_proof_token(body.token, user_id, payload):
+        raise HTTPException(status_code=400, detail="Invalid or expired proof token")
+    if body.network not in ("-3", "-239"):
+        raise HTTPException(status_code=400, detail="Unsupported wallet network")
+    try:
+        result = await verify_ton_proof(
+            address=body.address,
+            public_key=body.public_key,
+            proof=proof,
+            expected_domain=body.domain,
+        )
+    except TonProofError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result.get("valid"):
+        raise HTTPException(status_code=400, detail=str(result.get("error", "Invalid proof")))
+    user = await _get_or_create_user(db, user_id)
+    verified_address = str(result["address"])
+    if TON_NETWORK == "testnet" and is_mainnet_ton_address(verified_address):
+        raise HTTPException(status_code=422, detail="Use a TON testnet wallet address")
+    user.wallet_address = verified_address
+    await db.commit()
+    return {"verified": True, "wallet_address": verified_address}
 
 
 @app.post("/api/payment-intents", status_code=201)

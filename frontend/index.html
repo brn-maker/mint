@@ -229,7 +229,7 @@
     const headers = { "Content-Type": "application/json" };
     if (tg?.initData) headers.Authorization = `tma ${tg.initData}`;
     else if (demoUserId) headers["X-Demo-User-ID"] = demoUserId;
-    const state = { dashboard: null, tickerMessages: [], selectedServer: null, pricing: null, activePaymentIntent: null, paymentPollTimer: null, submittedTransactionBoc: null, tonWallet: null };
+    const state = { dashboard: null, tickerMessages: [], selectedServer: null, pricing: null, activePaymentIntent: null, paymentPollTimer: null, submittedTransactionBoc: null, tonWallet: null, proofToken: null, walletVerified: false };
     let tonConnectUI = null;
     const SERVER_PRESENTATION = {
       "h100-node-01": {
@@ -286,10 +286,15 @@
       if (disconnectBtn) disconnectBtn.classList.toggle("hidden", !wallet);
       if (wallet) {
         const addr = wallet.account.address || "";
-        if (isTestnet) {
-          statusEl.textContent = `Connected: ${addr} (testnet)`;
+        if (isTestnet && state.walletVerified) {
+          statusEl.textContent = `Verified: ${addr} (testnet)`;
           statusEl.className = "mt-1 break-all text-xs text-mint";
-          useBtn.textContent = "Use this wallet";
+          useBtn.textContent = "Verified ✓";
+          useBtn.disabled = true;
+        } else if (isTestnet) {
+          statusEl.textContent = `Connected (not verified): ${addr}`;
+          statusEl.className = "mt-1 break-all text-xs text-amber-200";
+          useBtn.textContent = "Verify this wallet";
           useBtn.disabled = false;
         } else {
           statusEl.textContent = "Connected wallet is not on TON testnet — switch networks.";
@@ -300,7 +305,7 @@
       } else {
         statusEl.textContent = "Connect your DeFi wallet to withdraw directly to it.";
         statusEl.className = "mt-1 truncate text-xs text-slate-400";
-        useBtn.textContent = "Connect";
+        useBtn.textContent = "Connect & verify";
         useBtn.disabled = false;
       }
     }
@@ -331,10 +336,66 @@
           manifestUrl: new URL("/tonconnect-manifest.json", location.origin).href,
           buttonRootId: "ton-connect-button"
         });
-        tonConnectUI.onStatusChange(updateTonConnectStatus);
+        tonConnectUI.onStatusChange(handleWalletStatus);
       } catch (error) {
         $("network-status").textContent = "Wallet connect unavailable";
         console.error("TON Connect could not be initialized", error);
+      }
+    }
+    async function handleWalletStatus(wallet) {
+      state.tonWallet = wallet || null;
+      if (!wallet) {
+        state.walletVerified = false;
+        state.proofToken = null;
+      } else if (!state.proofToken) {
+        // Connected without a proof request (e.g. via the deposit flow).
+        state.walletVerified = false;
+      }
+      updateTonConnectStatus(wallet);
+      await verifyConnectedWalletProof(wallet);
+    }
+    async function verifyConnectedWalletProof(wallet) {
+      if (!wallet || !state.proofToken) return;
+      const tonProof = wallet.connectItems?.tonProof;
+      const token = state.proofToken;
+      state.proofToken = null;
+      if (!tonProof || !('proof' in tonProof)) {
+        toast("This wallet did not return a proof; connect again to verify.");
+        return;
+      }
+      try {
+        await api("/api/wallet-proof/verify", {
+          method: "POST",
+          body: JSON.stringify({
+            address: wallet.account.address,
+            public_key: wallet.account.publicKey,
+            proof: tonProof.proof,
+            token: token,
+            domain: location.host,
+            network: wallet.account.chain,
+          })
+        });
+        state.walletVerified = true;
+        toast("Wallet verified and set as your payout wallet");
+        renderPayoutWallet();
+        await refresh();
+      } catch (error) {
+        toast(error.message || "Wallet verification failed");
+        try { await tonConnectUI.disconnect(); } catch { /* ignore */ }
+      }
+    }
+    async function connectWithProof() {
+      if (!tonConnectUI) { toast("Wallet SDK unavailable"); return; }
+      try {
+        const challenge = await api("/api/wallet-proof/challenge", { method: "POST" });
+        tonConnectUI.setConnectRequestParameters({
+          state: "ready",
+          value: { tonProof: challenge.payload }
+        });
+        state.proofToken = challenge.token;
+        await tonConnectUI.connectWallet();
+      } catch (error) {
+        toast(error.message || "Could not connect wallet");
       }
     }
     function toNanoTon(amount) {
@@ -825,22 +886,11 @@
       const button = $("use-connected-wallet");
       if (!tonConnectUI) { toast("Wallet SDK unavailable"); return; }
       try {
-        if (!state.tonWallet) {
-          button.disabled = true;
-          await tonConnectUI.connectWallet();
-          return;
+        // The payout wallet is only ever set via a verified ton_proof.
+        if (state.tonWallet && !state.walletVerified) {
+          await tonConnectUI.disconnect();
         }
-        const addr = state.tonWallet.account?.address;
-        if (!addr || state.tonWallet.account?.chain !== "-3") {
-          toast("Switch your wallet to TON testnet first.");
-          return;
-        }
-        if (!(await confirmPayoutWallet(addr))) return;
-        button.disabled = true;
-        await api("/api/profile", { method: "PUT", body: JSON.stringify({ wallet_address: addr }) });
-        $("wallet-address").value = addr;
-        toast("Payout wallet set to your connected DeFi wallet");
-        await refresh();
+        await connectWithProof();
       } catch (error) {
         toast(error.message || "Could not connect wallet");
       } finally {
