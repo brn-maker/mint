@@ -227,7 +227,10 @@ async def _get_or_create_user(
 
 @app.get("/")
 async def dashboard_page() -> FileResponse:
-    return FileResponse(FRONTEND_FILE)
+    return FileResponse(
+        FRONTEND_FILE,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/tonconnect-manifest.json")
@@ -248,7 +251,10 @@ async def healthz() -> dict[str, str]:
 @app.get("/servers")
 @app.get("/servers/{server_path:path}")
 async def server_catalog_page(server_path: str = "") -> FileResponse:
-    return FileResponse(FRONTEND_FILE)
+    return FileResponse(
+        FRONTEND_FILE,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/api/dashboard")
