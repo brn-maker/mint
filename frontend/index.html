@@ -97,6 +97,7 @@
                 </div>
                 <button id="use-connected-wallet" class="shrink-0 rounded-xl border border-mint/30 bg-mint/10 px-3 py-2 text-xs font-bold text-mint transition hover:bg-mint/20 disabled:cursor-not-allowed disabled:opacity-40" type="button">Connect</button>
               </div>
+              <button id="disconnect-payout-wallet" class="mt-2 hidden text-[11px] font-medium text-slate-500 transition hover:text-rose-300" type="button">Disconnect wallet</button>
             </div>
           </article>
         </div>
@@ -278,14 +279,16 @@
     function renderPayoutWallet() {
       const statusEl = $("payout-wallet-status");
       const useBtn = $("use-connected-wallet");
+      const disconnectBtn = $("disconnect-payout-wallet");
       if (!statusEl || !useBtn) return;
       const wallet = state.tonWallet;
       const isTestnet = wallet?.account?.chain === "-3";
+      if (disconnectBtn) disconnectBtn.classList.toggle("hidden", !wallet);
       if (wallet) {
         const addr = wallet.account.address || "";
         if (isTestnet) {
-          statusEl.textContent = `Connected: ${addr.slice(0, 14)}…${addr.slice(-8)} (testnet)`;
-          statusEl.className = "mt-1 truncate text-xs text-mint";
+          statusEl.textContent = `Connected: ${addr} (testnet)`;
+          statusEl.className = "mt-1 break-all text-xs text-mint";
           useBtn.textContent = "Use this wallet";
           useBtn.disabled = false;
         } else {
@@ -300,6 +303,22 @@
         useBtn.textContent = "Connect";
         useBtn.disabled = false;
       }
+    }
+    function confirmPayoutWallet(address) {
+      const message = `Set your payout wallet to:\n\n${address}\n\nConfirm this is YOUR testnet wallet.`;
+      if (tg?.showPopup) {
+        return new Promise((resolve) => {
+          tg.showPopup({
+            title: "Confirm payout wallet",
+            message,
+            buttons: [
+              { id: "confirm", type: "default", text: "Yes, this is mine" },
+              { id: "cancel", type: "cancel", text: "Cancel" }
+            ]
+          }, (buttonId) => resolve(buttonId === "confirm"));
+        });
+      }
+      return Promise.resolve(window.confirm(message));
     }
     function initializeTonConnect() {
       const TonConnectUI = window.TON_CONNECT_UI?.TonConnectUI;
@@ -816,6 +835,7 @@
           toast("Switch your wallet to TON testnet first.");
           return;
         }
+        if (!(await confirmPayoutWallet(addr))) return;
         button.disabled = true;
         await api("/api/profile", { method: "PUT", body: JSON.stringify({ wallet_address: addr }) });
         $("wallet-address").value = addr;
@@ -825,6 +845,17 @@
         toast(error.message || "Could not connect wallet");
       } finally {
         button.disabled = false;
+      }
+    });
+    $("disconnect-payout-wallet")?.addEventListener("click", async () => {
+      if (!tonConnectUI) return;
+      try {
+        await tonConnectUI.disconnect();
+        $("wallet-address").value = "";
+        toast("Wallet disconnected");
+        renderPayoutWallet();
+      } catch (error) {
+        toast(error.message || "Could not disconnect wallet");
       }
     });
 
