@@ -39,11 +39,12 @@
     .route-view { animation: route-enter .28s cubic-bezier(.2,.8,.2,1) both; }
     @keyframes route-enter { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
     .safe-bottom { padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+    .safe-top { padding-top: max(1.25rem, env(safe-area-inset-top)); }
     input, select { color-scheme: dark; }
   </style>
 </head>
 <body class="min-h-screen text-slate-100 antialiased">
-  <div class="mx-auto max-w-6xl px-4 pb-12 pt-5 sm:px-6 lg:px-8">
+  <div class="safe-top mx-auto max-w-6xl px-5 pb-12 sm:px-6 lg:px-8">
     <header class="mb-7 flex items-center justify-between">
       <a href="/" class="flex items-center gap-3" aria-label="Mint AI home">
         <span class="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-lg font-black text-ink shadow-glow">M</span>
@@ -112,12 +113,12 @@
           </div>
           <p class="mb-4 max-w-lg text-sm leading-6 text-slate-300">Share your link and earn <strong class="text-mint">30% of each referred friend’s first deposit</strong>. Invite more people who invest, and your one-time referral rewards grow with every new referral.</p>
           <p class="mb-4 text-[11px] leading-5 text-slate-500">Earned once, when each referred investor makes their first deposit. Demo rewards are simulated.</p>
-          <div class="flex gap-2">
+          <div class="flex flex-col gap-2 sm:flex-row">
             <input id="referral-link" readonly aria-label="Personal referral link" class="min-w-0 flex-1 rounded-xl border border-line bg-ink px-3 py-3 text-xs text-slate-300 outline-none">
-            <button id="copy-link" class="shrink-0 rounded-xl border border-mint/30 bg-mint/10 px-4 text-xs font-bold text-mint transition hover:bg-mint/20">Invite &amp; earn</button>
+            <button id="copy-link" class="shrink-0 rounded-xl border border-mint/30 bg-mint/10 px-4 py-3 text-xs font-bold text-mint transition hover:bg-mint/20">Invite &amp; earn</button>
           </div>
           <p id="copy-status" class="mt-2 min-h-4 text-[11px] text-mint"></p>
-          <p id="referral-progress" class="mt-2 text-xs leading-5 text-slate-400"></p>
+          <p id="referral-progress" class="mt-2 hidden text-xs leading-5 text-slate-400"></p>
         </article>
 
         <article class="glass flex flex-col justify-between rounded-3xl border border-line p-5 sm:p-6">
@@ -167,7 +168,6 @@
           <div id="ledger-empty" class="px-4 py-8 text-center text-sm text-slate-500">No transactions yet.</div>
         </div>
       </section>
-      <p class="mt-8 text-center text-[10px] leading-5 text-slate-600">Mint AI demo interface · server analytics and dividends are simulated. Payment confirmation and payouts require configured providers.</p>
     </main>
 
     <main id="server-catalog-view" class="hidden">
@@ -175,10 +175,9 @@
         <button class="route-back mb-5 inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-mint" data-route="/">← <span>Dashboard</span></button>
         <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div><p class="text-xs font-semibold uppercase tracking-[.18em] text-mint">Compute marketplace</p><h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">Choose a server</h1><p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Compare the hardware configurations connected to each compute pool, then open a listing to create a payment request.</p></div>
-          <span class="rounded-full border border-violet/30 bg-violet/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-violet">Demo catalog</span>
+          <span class="rounded-full border border-violet/30 bg-violet/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-violet">Catalog</span>
         </div>
         <div id="server-catalog-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"></div>
-        <p class="mt-5 rounded-2xl border border-line bg-panel/70 p-4 text-xs leading-5 text-slate-500">Images are representative stock photos and are not photographs of verified Mint AI equipment. This demo does not confirm that any server is owned, available, or accepting investment.</p>
       </section>
     </main>
 
@@ -327,14 +326,14 @@
       const totals = {};
       lockedSlots.filter((slot) => slot.currency === "TON").forEach((slot) => totals.TON = (totals.TON || 0) + Number(slot.net_investment));
       $("locked-balances").innerHTML = Object.keys(totals).length
-        ? Object.entries(totals).map(([currency, amount]) => `<div>${number(amount)} <span class="text-sm font-medium text-slate-500">${escapeHtml(currency)}</span></div>`).join("")
+        ? Object.entries(totals).map(([currency, amount]) => `<div class="text-3xl font-bold tracking-tight"><span class="text-mint">${number(amount)}</span> <span class="text-base font-medium text-slate-400">${escapeHtml(currency)}</span></div>`).join("")
         : '<div class="text-base font-medium text-slate-500">No funds in locked wallet</div>';
       $("clearance-notices").innerHTML = Object.keys(totals).length
         ? '<p class="text-xs text-slate-500">TON principal remains locked until 50 qualified referrals.</p>'
         : '<p class="text-xs text-slate-500">No TON principal remains locked.</p>';
       const ghosts = data.ghost_dividends || [];
       $("ghost-dividends").innerHTML = data.user.ghost_dividends_enabled && ghosts.length
-        ? ghosts.map((item) => `<div class="rounded-xl border border-violet/20 bg-violet/5 px-3 py-2 text-xs"><p class="font-semibold text-violet">Ghost dividend projection · ${escapeHtml(item.currency)} ${number(item.projected_total)}</p><p class="mt-1 text-slate-500">Principal ${number(item.principal)} + simulated ${number(item.ghost_dividend)}. Not withdrawable; resets Monday 00:00 UTC+3.</p></div>`).join("")
+        ? ghosts.map((item) => `<div class="rounded-xl border border-violet/20 bg-violet/5 px-3 py-2 text-xs"><p class="font-semibold text-violet">Ghost dividend projection</p><p class="mt-0.5 text-2xl font-bold tracking-tight text-mint">${number(item.projected_total)} <span class="text-sm font-medium text-slate-400">${escapeHtml(item.currency)}</span></p><p class="mt-1 text-slate-500">Principal ${number(item.principal)} + simulated ${number(item.ghost_dividend)}. Reach 5 qualified referrals to make dividends withdrawable; resets Monday 00:00 UTC+3.</p></div>`).join("")
         : data.user.true_dividends_active_until
           ? `<p class="rounded-xl border border-mint/15 bg-mint/5 px-3 py-2 text-xs text-mint">True server dividends are enabled until ${new Date(data.user.true_dividends_active_until).toLocaleString()}.</p>`
           : data.user.qualified_referrals >= 5
@@ -426,6 +425,8 @@
       $("welcome-name").textContent = data.user.username ? `, @${data.user.username}` : "";
       $("referral-link").value = data.user.referral_link;
       $("wallet-address").value = data.user.wallet_address || "";
+      const hasDeposited = data.slots.length > 0;
+      $("referral-progress").classList.toggle("hidden", !hasDeposited);
       renderBalances(data);
       renderSlots(data.slots);
       renderLedger(data.ledger);
@@ -446,7 +447,7 @@
                 <div><span class="block text-[10px] font-semibold uppercase tracking-wider text-mint">${escapeHtml(server.tier.label)} tier</span><span class="mt-1 block text-xs font-semibold">${number(server.ton_amount)} TON</span></div>
                 <span class="text-xs font-semibold text-mint">View details →</span>
               </div>
-              ${server.daily_dividend_percent ? `<p class="mt-3 text-[10px] leading-4 text-slate-400">Simulated daily dividend: ${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} TON per day at the listed price.</p>` : ""}
+              ${server.daily_dividend_percent ? `<p class="mt-3 text-[10px] leading-4 text-slate-400">Accumulated daily dividend: ${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} TON per day at the listed price.</p>` : ""}
             </div>
           </button>
         </article>`).join("");
@@ -466,8 +467,7 @@
                 <div class="rounded-2xl border border-line bg-ink/60 p-4"><dt class="text-[10px] uppercase tracking-wider text-slate-500">Pool size</dt><dd class="mt-2 text-sm font-semibold">${escapeHtml(server.specs.split("·")[0].trim())}</dd></div>
                 <div class="rounded-2xl border border-line bg-ink/60 p-4"><dt class="text-[10px] uppercase tracking-wider text-slate-500">Connectivity</dt><dd class="mt-2 text-sm font-semibold">High-speed fabric</dd></div>
               </dl>
-              ${server.daily_dividend_percent ? `<div class="mt-5 rounded-2xl border border-mint/15 bg-mint/5 p-4"><h2 class="text-sm font-semibold text-mint">Simulated daily dividends</h2><p class="mt-2 text-xs leading-5 text-slate-400">${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} TON per day on the ${number(server.ton_amount)} TON listed price.</p><p class="mt-2 text-[10px] leading-4 text-slate-500">Backend accrual uses each confirmed slot's net investment. Illustrative demo return; not guaranteed.</p></div>` : ""}
-              <p class="mt-4 text-xs leading-5 text-slate-500">Listing and telemetry are illustrative demo data. The image does not verify or represent a specific physical server.</p>
+              ${server.daily_dividend_percent ? `<div class="mt-5 rounded-2xl border border-mint/15 bg-mint/5 p-4"><h2 class="text-sm font-semibold text-mint">Accumulated daily dividends</h2><p class="mt-2 text-xs leading-5 text-slate-400">${number(server.daily_dividend_percent, 0)}% per day · ${number(server.daily_dividend_amount)} TON per day on the ${number(server.ton_amount)} TON listed price.</p></div>` : ""}
             </div>
             <form id="investment-form" class="self-start rounded-2xl border border-line bg-ink/60 p-4 sm:p-5">
               <h2 class="text-base font-semibold">${escapeHtml(server.tier.label)} server tier</h2><p class="mt-1 text-xs leading-5 text-slate-500">This server has a fixed investment tier.</p>
