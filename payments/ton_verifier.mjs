@@ -1,32 +1,36 @@
 import { Address } from "@ton/core";
 import { mnemonicToWalletKey, mnemonicValidate } from "@ton/crypto";
-import { TonClient, WalletContractV5R1 } from "@ton/ton";
+import { WalletContractV5R1 } from "@ton/ton";
 
 const fail = (message) => {
   process.stderr.write(`${message}\n`);
   process.exit(1);
 };
 
-function readComment(body) {
-  try {
-    const slice = body.beginParse();
-    if (slice.remainingBits < 32 || slice.loadUint(32) !== 0) return "";
-    return slice.loadStringTail();
-  } catch {
-    return "";
-  }
-}
-
-async function getTransactionsWithRetry(client, address, opts) {
-  const maxAttempts = 8;
+async function fetchJson(url, apiKey) {
+  const headers = { accept: "application/json" };
+  if (apiKey) headers["X-API-Key"] = apiKey;
+  const maxAttempts = 5;
   let lastError;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      return await client.getTransactions(address, opts);
+      const response = await fetch(url, { headers });
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`HTTP ${response.status}`);
+        const backoff = Math.min(5000, 750 * 2 ** attempt);
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        continue;
+      }
+      if (!response.ok) {
+        let detail = "";
+        try {
+          detail = (await response.text()).slice(0, 300);
+        } catch {}
+        throw new Error(`HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+      }
+      return await response.json();
     } catch (error) {
       lastError = error;
-      // Toncenter testnet lite servers can transiently fail with
-      // "lt not in db" replication lag; back off and retry before giving up.
       const backoff = Math.min(5000, 750 * 2 ** attempt);
       await new Promise((resolve) => setTimeout(resolve, backoff));
     }
@@ -46,19 +50,33 @@ async function main() {
     fail("TON_API_ENDPOINT, TON_API_KEY, APP_WALLET_MNEMONIC, and TON_DEPOSIT_ADDRESS are required");
   }
   if (network !== "testnet") fail("TON transaction scanning is restricted to TON_NETWORK=testnet");
+
+  // Resolve the v3 REST endpoint. Prefer an explicit override; otherwise derive it
+  // from the v2 endpoint (https://<host>/api/v2/jsonRPC -> https://<host>/api/v3).
+  const v3Endpoint = process.env.TON_API_V3_ENDPOINT?.trim();
   let endpointUrl;
-  try {
-    endpointUrl = new URL(endpoint);
-  } catch {
-    fail("TON_API_ENDPOINT must be a valid URL");
+  if (v3Endpoint) {
+    try {
+      endpointUrl = new URL(v3Endpoint);
+    } catch {
+      fail("TON_API_V3_ENDPOINT must be a valid URL");
+    }
+  } else {
+    try {
+      const base = new URL(endpoint);
+      endpointUrl = new URL(`${base.protocol}//${base.host}/api/v3`);
+    } catch {
+      fail("TON_API_ENDPOINT must be a valid URL");
+    }
   }
-  const testnetHost = endpointUrl.hostname
-    .toLowerCase()
+  const host = endpointUrl.hostname.toLowerCase();
+  const isTestnetHost = host
     .split(".")
     .some((label) => label === "testnet" || label.startsWith("testnet-"));
-  if (endpointUrl.protocol !== "https:" || !testnetHost) {
-    fail("TON_API_ENDPOINT must be an HTTPS testnet RPC endpoint");
+  if (endpointUrl.protocol !== "https:" || !isTestnetHost) {
+    fail("TON API endpoint must be an HTTPS testnet endpoint");
   }
+
   if (!Number.isSafeInteger(since) || since < 0) fail("Transaction scan start time is invalid");
   if (!(await mnemonicValidate(mnemonic))) fail("APP_WALLET_MNEMONIC is invalid");
 
@@ -81,58 +99,51 @@ async function main() {
     fail("TON_DEPOSIT_ADDRESS does not match the testnet Wallet V5R1 derived from APP_WALLET_MNEMONIC");
   }
 
-  const client = new TonClient({ endpoint, apiKey });
-  const transfers = [];
-  let lt;
-  let hash;
-  let reachedStart = false;
+  const account = wallet.address.toRawString();
+  const accountLower = account.toLowerCase();
+  // Match the prior v2 scan window: allow a small buffer before the intent's creation time.
+  const startUtime = Math.max(0, since - 60);
+  const pageSize = 100;
+  const maxPages = 100;
 
-  for (let page = 0; page < 100; page += 1) {
-    const transactions = await getTransactionsWithRetry(client, wallet.address, {
-      limit: 100,
-      ...(lt && hash ? { lt, hash } : {}),
+  const transfers = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams({
+      account,
+      limit: String(pageSize),
+      sort: "desc",
+      start_utime: String(startUtime),
+      offset: String(page * pageSize),
     });
-    if (!transactions.length) {
-      reachedStart = true;
-      break;
-    }
+    const url = `${endpointUrl.toString().replace(/\/$/, "")}/transactions?${params.toString()}`;
+    const data = await fetchJson(url, apiKey);
+    const transactions = Array.isArray(data?.transactions) ? data.transactions : [];
+    if (!transactions.length) break;
 
     for (const transaction of transactions) {
-      if (transaction.now < since - 60) {
-        reachedStart = true;
-        continue;
-      }
-      const message = transaction.inMessage;
-      if (
-        !message
-        || message.info.type !== "internal"
-        || !message.info.dest.equals(wallet.address)
-      ) continue;
-      const comment = readComment(message.body);
-      if (!comment) continue;
-      const bounceOutput = [...transaction.outMessages.values()].some(
-        (output) => output.info.type === "internal" && output.info.bounced,
-      );
+      const message = transaction.in_msg;
+      if (!message) continue;
+      if (!message.destination || String(message.destination).toLowerCase() !== accountLower) continue;
+      if (message.bounced) continue;
+
+      const decoded = message.message_content?.decoded;
+      const comment = typeof decoded?.comment === "string" ? decoded.comment : "";
+      const bounceOutput = Array.isArray(transaction.out_msgs)
+        && transaction.out_msgs.some((output) => output.bounced === true);
+
       transfers.push({
-        tx_hash: transaction.hash().toString("hex"),
-        amount_nano: message.info.value.coins.toString(),
+        tx_hash: Buffer.from(String(transaction.hash), "base64").toString("hex"),
+        amount_nano: String(message.value ?? "0"),
         comment,
-        incoming_bounced: message.info.bounced,
-        bounce_output: bounceOutput,
+        incoming_bounced: message.bounced === true,
+        bounce_output: bounceOutput === true,
       });
     }
 
-    const oldest = transactions.at(-1);
-    if (oldest.now < since - 60) {
-      reachedStart = true;
-      break;
-    }
-    lt = oldest.lt.toString();
-    hash = oldest.hash().toString("base64");
+    if (transactions.length < pageSize) break;
   }
 
-  if (!reachedStart) fail("TON transaction history exceeded the configured scan window");
   process.stdout.write(JSON.stringify(transfers));
 }
 
-main().catch(() => fail("TON transaction scan failed"));
+main().catch((error) => fail(`TON transaction scan failed: ${error?.message || error}`));

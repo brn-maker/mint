@@ -41,9 +41,11 @@ TON_API_ENDPOINT=https://testnet.toncenter.com/api/v2/jsonRPC
 TON_API_KEY=<testnet RPC API key>
 APP_WALLET_MNEMONIC=<wallet mnemonic words>
 TON_PAYMENT_SCAN_INTERVAL_SECONDS=10
+# Optional: scanner uses the toncenter v3 REST API by default; override it here if needed.
+TON_API_V3_ENDPOINT=
 ```
 
-The Node verifier uses `@ton/ton` and `@ton/crypto` to connect to the TON RPC endpoint, derive the receiving testnet Wallet V5R1 address from the mnemonic, and parse incoming native TON transaction comments. It refuses non-testnet configuration and a configured deposit address that does not match the derived wallet. The Python worker polls transaction history and confirms an intent only for its unique transaction comment and exact quoted amount. Never commit or expose `APP_WALLET_MNEMONIC` or `TON_API_KEY`; do not use a mainnet endpoint or send real funds.
+The Node verifier uses `@ton/ton` and `@ton/crypto` to derive the receiving testnet Wallet V5R1 address from the mnemonic, then reads the wallet's incoming transactions through the toncenter v3 REST API (`https://testnet.toncenter.com/api/v3/transactions`). The v3 indexer is used because the v2 `getTransactions` JSON-RPC method on the testnet lite servers intermittently returns `LITE_SERVER_UNKNOWN … lt not in db`, which makes the deposit history unreadable. `TON_API_V3_ENDPOINT` overrides the derived endpoint when you use a different testnet host. The verifier refuses non-testnet configuration and a configured deposit address that does not match the derived wallet. The Python worker polls transaction history and confirms an intent only for its unique transaction comment and exact quoted amount. Never commit or expose `APP_WALLET_MNEMONIC` or `TON_API_KEY`; do not use a mainnet endpoint or send real funds.
 
 ## 4. TON testnet payout adapter
 

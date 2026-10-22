@@ -42,10 +42,10 @@ async def scan_ton_transactions(since: datetime) -> list[TonTransaction]:
             str(VERIFIER_SCRIPT),
             str(int(since_utc.timestamp())),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=90)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=90)
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
@@ -53,8 +53,10 @@ async def scan_ton_transactions(since: datetime) -> list[TonTransaction]:
     except (OSError, asyncio.TimeoutError) as exc:
         raise TonVerifierError("TON transaction verifier could not complete") from exc
     if process.returncode != 0:
+        detail = stderr.decode(errors="replace").strip() if stderr else ""
         raise TonVerifierError(
-            "TON transaction verifier rejected its configuration or failed to scan"
+            "TON transaction verifier failed to scan"
+            + (f": {detail}" if detail else "")
         )
     try:
         records = json.loads(stdout)
