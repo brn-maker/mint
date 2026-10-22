@@ -24,6 +24,7 @@ from config import (
     AUTO_CREATE_SCHEMA,
     ENABLE_BACKGROUND_WORKERS,
     TELEGRAM_BOT_TOKEN,
+    TON_NETWORK,
 )
 from database import Base, engine, get_db
 from dividends import (
@@ -57,7 +58,7 @@ from pricing import public_server_listings
 from referrals import build_referral_link, generate_user_referral_code
 from rate_limit import rate_limit_sensitive
 from telegram_auth import TelegramAuthError, validate_telegram_init_data
-from wallet_validation import is_plausible_payout_address
+from wallet_validation import is_mainnet_ton_address, is_plausible_payout_address
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -481,6 +482,13 @@ async def pricing() -> dict[str, object]:
     return {"servers": public_server_listings(), "currency": "TON"}
 
 
+def _validate_payout_address(address: str) -> None:
+    if not is_plausible_payout_address(address):
+        raise HTTPException(status_code=422, detail="Enter a valid TON wallet address")
+    if TON_NETWORK == "testnet" and is_mainnet_ton_address(address):
+        raise HTTPException(status_code=422, detail="Use a TON testnet wallet address")
+
+
 @app.post("/api/register")
 async def register(
     body: RegisterRequest,
@@ -494,8 +502,7 @@ async def register(
     if body.username:
         user.username = body.username[:64]
     if body.wallet_address:
-        if not is_plausible_payout_address(body.wallet_address):
-            raise HTTPException(status_code=422, detail="Enter a valid TON wallet address")
+        _validate_payout_address(body.wallet_address)
         user.wallet_address = body.wallet_address
     await db.commit()
     return {"user_id": user.id, "referral_code": user.referral_code}
@@ -509,8 +516,7 @@ async def update_profile(
 ) -> dict[str, str]:
     user_id, telegram_user = _telegram_user_id(request)
     user = await _get_or_create_user(db, user_id, telegram_user)
-    if not is_plausible_payout_address(body.wallet_address):
-        raise HTTPException(status_code=422, detail="Enter a valid TON wallet address")
+    _validate_payout_address(body.wallet_address)
     user.wallet_address = body.wallet_address
     await db.commit()
     return {"wallet_address": user.wallet_address}

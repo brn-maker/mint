@@ -761,7 +761,7 @@ class StagingBugHunt(unittest.IsolatedAsyncioTestCase):
                     root_response = await client.post(
                         "/api/register",
                         headers={"X-Demo-User-ID": "2"},
-                        json={"wallet_address": "EQ" + "A" * 46},
+                        json={"wallet_address": "0Q" + "A" * 46},
                     )
                     self.assertEqual(root_response.status_code, 200)
                     referral_code = root_response.json()["referral_code"]
