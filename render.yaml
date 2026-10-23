@@ -39,5 +39,5 @@ services:
         sync: false
       - key: APP_WALLET_MNEMONIC
         sync: false
-      - key: TON_TESTNET_PAYOUTS_ENABLED
+      - key: TON_PAYOUTS_ENABLED
         value: "false"

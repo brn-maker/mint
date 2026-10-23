@@ -51,19 +51,25 @@ function resolveV3Endpoint(endpoint) {
   return new URL(`${base.protocol}//${base.host}/api/v3`);
 }
 
-function testnetEndpoint(endpoint) {
+function validateEndpoint(endpoint, network) {
   let parsed;
   try {
     parsed = new URL(endpoint);
   } catch {
-    throw new Error("TON_API_ENDPOINT must be a valid HTTPS testnet RPC URL");
+    throw new Error("TON_API_ENDPOINT must be a valid HTTPS RPC URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("TON_API_ENDPOINT must be an HTTPS RPC endpoint");
   }
   const isTestnetHost = parsed.hostname
     .toLowerCase()
     .split(".")
     .some((label) => label === "testnet" || label.startsWith("testnet-"));
-  if (parsed.protocol !== "https:" || !isTestnetHost) {
-    throw new Error("TON_API_ENDPOINT must be an HTTPS testnet RPC endpoint");
+  if (network === "testnet" && !isTestnetHost) {
+    throw new Error("TON_NETWORK=testnet requires a testnet RPC endpoint");
+  }
+  if (network === "mainnet" && isTestnetHost) {
+    throw new Error("TON_NETWORK=mainnet requires a mainnet RPC endpoint");
   }
 }
 
@@ -80,16 +86,19 @@ function amountString(amount) {
 }
 
 async function setup() {
-  if (process.env.TON_NETWORK !== "testnet") {
-    throw new Error("TON payouts are restricted to TON_NETWORK=testnet");
+  const network = process.env.TON_NETWORK;
+  const isTestnet = network === "testnet";
+  const isMainnet = network === "mainnet";
+  if (!isTestnet && !isMainnet) {
+    throw new Error("TON_NETWORK must be 'testnet' or 'mainnet'");
   }
   const endpoint = process.env.TON_API_ENDPOINT;
   const apiKey = process.env.TON_API_KEY;
   const mnemonic = process.env.APP_WALLET_MNEMONIC?.trim().split(/\s+/);
   if (!endpoint || !apiKey || !mnemonic?.length) {
-    throw new Error("TON testnet RPC credentials and app wallet mnemonic are required");
+    throw new Error("TON RPC credentials and app wallet mnemonic are required");
   }
-  testnetEndpoint(endpoint);
+  validateEndpoint(endpoint, network);
   if (!(await mnemonicValidate(mnemonic))) {
     throw new Error("APP_WALLET_MNEMONIC is invalid");
   }
@@ -98,7 +107,7 @@ async function setup() {
   const wallet = WalletContractV5R1.create({
     publicKey: keyPair.publicKey,
     walletId: {
-      networkGlobalId: -3,
+      networkGlobalId: isTestnet ? -3 : -239,
       context: { walletVersion: "v5r1", workchain: 0, subwalletNumber: 0 },
     },
   });
@@ -109,7 +118,7 @@ async function setup() {
     throw new Error("TON_DEPOSIT_ADDRESS is invalid");
   }
   if (!configuredAddress.equals(wallet.address)) {
-    throw new Error("TON_DEPOSIT_ADDRESS does not match the derived testnet Wallet V5R1");
+    throw new Error("TON_DEPOSIT_ADDRESS does not match the derived Wallet V5R1");
   }
   const v3Endpoint = resolveV3Endpoint(endpoint);
   const client = new TonClient({ endpoint, apiKey, timeout: 15000 });
@@ -165,7 +174,7 @@ async function findExistingPayout(v3Endpoint, apiKey, wallet, destination, marke
       const comment = outMsg.message_content?.decoded?.comment;
       if (dest !== destinationRaw || comment !== marker) continue;
       if (transaction.description?.aborted === true) {
-        throw new Error("Previously submitted testnet payout was aborted");
+        throw new Error("Previously submitted payout was aborted");
       }
       return {
         tx_hash: Buffer.from(String(transaction.hash), "base64").toString("hex"),
@@ -180,15 +189,12 @@ async function findExistingPayout(v3Endpoint, apiKey, wallet, destination, marke
 }
 
 async function main() {
-  if (process.env.TON_NETWORK !== "testnet") {
-    throw new Error("TON payouts are restricted to TON_NETWORK=testnet");
-  }
   const input = await readInput();
   if (!input || !["quote", "send"].includes(input.operation)) {
     throw new Error("Unsupported payout operation");
   }
   if (input.currency && input.currency !== "TON") {
-    throw new Error("Testnet TON payouts support TON only");
+    throw new Error("TON payouts support TON only");
   }
   const { client, wallet, keyPair, v3Endpoint, apiKey } = await setup();
   const amount = Number(input.amount);
@@ -290,4 +296,4 @@ async function main() {
   fail("Payout submitted but not yet visible; retry will check its unique on-chain comment", "pending");
 }
 
-main().catch((error) => fail(`TON testnet payout helper failed: ${error?.message || error}`));
+main().catch((error) => fail(`TON payout helper failed: ${error?.message || error}`));

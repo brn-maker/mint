@@ -28,7 +28,7 @@ def build_crypto_instructions(intent: PaymentIntent) -> dict[str, object]:
         and TON_API_ENDPOINT
         and TON_API_KEY
         and APP_WALLET_MNEMONIC
-        and TON_NETWORK == "testnet"
+        and TON_NETWORK in ("testnet", "mainnet")
     )
     if not configured:
         return {
@@ -36,7 +36,7 @@ def build_crypto_instructions(intent: PaymentIntent) -> dict[str, object]:
             "memo": build_deposit_memo(intent),
             "network": TON_NETWORK,
             "configured": False,
-            "note": "Configure the TON testnet RPC and receiving wallet before sending funds.",
+            "note": "Configure the TON RPC and receiving wallet before sending funds.",
         }
     return {
         "deposit_address": TON_DEPOSIT_ADDRESS,

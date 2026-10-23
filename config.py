@@ -15,11 +15,20 @@ WITHDRAWAL_QUOTE_TTL_SECONDS = int(os.getenv("WITHDRAWAL_QUOTE_TTL_SECONDS", "30
 
 TON_DEPOSIT_ADDRESS = os.getenv("TON_DEPOSIT_ADDRESS", "").strip()
 TON_NETWORK = os.getenv("TON_NETWORK", "testnet").strip().lower()
+if TON_NETWORK not in ("testnet", "mainnet"):
+    raise RuntimeError("TON_NETWORK must be 'testnet' or 'mainnet'")
+TON_IS_TESTNET = TON_NETWORK == "testnet"
+TON_IS_MAINNET = TON_NETWORK == "mainnet"
+# TON Connect wallet chain: -3 is testnet, -239 is mainnet.
+TON_CHAIN = "-3" if TON_IS_TESTNET else "-239"
+# TON wallet networkGlobalId used to derive the app wallet address.
+TON_NETWORK_GLOBAL_ID = -3 if TON_IS_TESTNET else -239
+
 TON_API_ENDPOINT = os.getenv("TON_API_ENDPOINT", "").strip()
 TON_API_KEY = os.getenv("TON_API_KEY", "").strip()
 APP_WALLET_MNEMONIC = os.getenv("APP_WALLET_MNEMONIC", "").strip()
-TON_TESTNET_PAYOUTS_ENABLED = (
-    os.getenv("TON_TESTNET_PAYOUTS_ENABLED", "false").strip().lower() == "true"
+TON_PAYOUTS_ENABLED = (
+    os.getenv("TON_PAYOUTS_ENABLED", "false").strip().lower() == "true"
 )
 TON_PAYMENT_SCAN_INTERVAL_SECONDS = float(
     os.getenv("TON_PAYMENT_SCAN_INTERVAL_SECONDS", "10")

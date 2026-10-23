@@ -6,6 +6,7 @@ _TON_ADDRESS = re.compile(r"^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$|^[A-Za-z0-9+/=_-]{4
 # TON user-friendly prefixes: mainnet uses EQ (bounceable) / UQ (non-bounceable),
 # testnet uses kQ (bounceable) / 0Q (non-bounceable).
 _MAINNET_PREFIXES = ("EQ", "UQ")
+_TESTNET_PREFIXES = ("kQ", "0Q")
 
 
 def is_plausible_payout_address(address: str) -> bool:
@@ -17,3 +18,7 @@ def is_plausible_payout_address(address: str) -> bool:
 
 def is_mainnet_ton_address(address: str) -> bool:
     return address.strip().startswith(_MAINNET_PREFIXES)
+
+
+def is_testnet_ton_address(address: str) -> bool:
+    return address.strip().startswith(_TESTNET_PREFIXES)

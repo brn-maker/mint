@@ -9,7 +9,6 @@ from config import (
     TON_API_ENDPOINT,
     TON_API_KEY,
     TON_DEPOSIT_ADDRESS,
-    TON_NETWORK,
 )
 from models import WithdrawalRequest
 from payments.payouts import (
@@ -24,7 +23,7 @@ PAYOUT_SCRIPT = Path(__file__).with_name("ton_payout.mjs")
 AMOUNT_QUANTUM = Decimal("0.00000001")
 
 
-class TonTestnetPayoutAdapter:
+class TonPayoutAdapter:
     async def quote_network_fee(
         self,
         currency: str,
@@ -33,7 +32,7 @@ class TonTestnetPayoutAdapter:
         destination: str | None = None,
     ) -> NetworkFeeQuote:
         if currency != "TON" or not destination:
-            raise PayoutRejected("Testnet TON payouts support TON only")
+            raise PayoutRejected("TON payouts support TON only")
         try:
             result = await self._run(
                 {
@@ -49,13 +48,13 @@ class TonTestnetPayoutAdapter:
                 raise ValueError("fee amounts must be non-negative")
             return NetworkFeeQuote(native_fee, withdrawal_fee, currency)
         except (ValueError, TypeError, KeyError, RuntimeError) as exc:
-            raise PayoutRejected("Unable to obtain a TON testnet fee quote") from exc
+            raise PayoutRejected("Unable to obtain a TON fee quote") from exc
 
     async def send(
         self, withdrawal: WithdrawalRequest, *, idempotency_key: str
     ) -> PayoutResult:
         if withdrawal.currency != "TON":
-            raise PayoutRejected("Testnet TON payouts support TON only")
+            raise PayoutRejected("TON payouts support TON only")
         try:
             result = await self._run(
                 {
@@ -78,21 +77,19 @@ class TonTestnetPayoutAdapter:
         except _PayoutScriptError as exc:
             if exc.category == "rejected":
                 raise PayoutRejected(
-                    "TON testnet payout was rejected before submission"
+                    "TON payout was rejected before submission"
                 ) from exc
             raise PayoutPending(
-                "TON testnet payout submission may have reached the chain; "
+                "TON payout submission may have reached the chain; "
                 "it will be checked before retrying"
             ) from exc
         except (ValueError, TypeError, KeyError, RuntimeError) as exc:
             raise PayoutPending(
-                "TON testnet payout result could not be verified; "
+                "TON payout result could not be verified; "
                 "it will be checked before retrying"
             ) from exc
 
     async def _run(self, payload: dict[str, str]) -> dict[str, Any]:
-        if TON_NETWORK != "testnet":
-            raise ValueError("TON payouts are restricted to TON testnet")
         if not all(
             (
                 TON_API_ENDPOINT,
@@ -101,7 +98,7 @@ class TonTestnetPayoutAdapter:
                 TON_DEPOSIT_ADDRESS,
             )
         ):
-            raise ValueError("Testnet TON payout configuration is incomplete")
+            raise ValueError("TON payout configuration is incomplete")
         try:
             process = await asyncio.create_subprocess_exec(
                 "node",

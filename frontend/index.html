@@ -262,18 +262,22 @@
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     })[char]);
     const number = (value, max = 4) => Number(value).toLocaleString(undefined, { maximumFractionDigits: max });
+    const appNetwork = () => state.pricing?.network || "testnet";
+    const appChain = () => state.pricing?.chain || "-3";
+    const networkLabel = () => (appNetwork() === "mainnet" ? "Mainnet" : "Testnet");
+    const isCorrectChain = (chain) => chain === appChain();
     function updateTonConnectStatus(wallet) {
       state.tonWallet = wallet || null;
-      const isTestnet = wallet?.account?.chain === "-3";
+      const correctChain = isCorrectChain(wallet?.account?.chain);
       const status = $("ton-wallet-status");
       if (status) {
         status.textContent = wallet
-          ? isTestnet ? `Connected to Testnet · ${wallet.account.address.slice(0, 8)}…` : "Switch your wallet to TON Testnet"
-          : "Connect a TON wallet to pay on Testnet.";
-        status.className = `mt-3 text-center text-xs ${wallet && !isTestnet ? "text-amber-200" : "text-slate-500"}`;
+          ? correctChain ? `Connected to ${networkLabel()} · ${wallet.account.address.slice(0, 8)}…` : `Switch your wallet to TON ${networkLabel()}`
+          : `Connect a TON wallet to pay on ${networkLabel()}.`;
+        status.className = `mt-3 text-center text-xs ${wallet && !correctChain ? "text-amber-200" : "text-slate-500"}`;
       }
       const payButton = $("send-ton-payment");
-      if (payButton) payButton.disabled = !wallet || !isTestnet;
+      if (payButton) payButton.disabled = !wallet || !correctChain;
       renderPayoutWallet();
     }
     function renderPayoutWallet() {
@@ -282,22 +286,22 @@
       const disconnectBtn = $("disconnect-payout-wallet");
       if (!statusEl || !useBtn) return;
       const wallet = state.tonWallet;
-      const isTestnet = wallet?.account?.chain === "-3";
+      const correctChain = isCorrectChain(wallet?.account?.chain);
       if (disconnectBtn) disconnectBtn.classList.toggle("hidden", !wallet);
       if (wallet) {
         const addr = wallet.account.address || "";
-        if (isTestnet && state.walletVerified) {
-          statusEl.textContent = `Verified: ${addr} (testnet)`;
+        if (correctChain && state.walletVerified) {
+          statusEl.textContent = `Verified: ${addr} (${networkLabel().toLowerCase()})`;
           statusEl.className = "mt-1 break-all text-xs text-mint";
           useBtn.textContent = "Verified ✓";
           useBtn.disabled = true;
-        } else if (isTestnet) {
+        } else if (correctChain) {
           statusEl.textContent = `Connected (not verified): ${addr}`;
           statusEl.className = "mt-1 break-all text-xs text-amber-200";
           useBtn.textContent = "Verify this wallet";
           useBtn.disabled = false;
         } else {
-          statusEl.textContent = "Connected wallet is not on TON testnet — switch networks.";
+          statusEl.textContent = `Connected wallet is not on TON ${networkLabel()} — switch networks.`;
           statusEl.className = "mt-1 truncate text-xs text-amber-200";
           useBtn.textContent = "Wrong network";
           useBtn.disabled = true;
@@ -310,7 +314,7 @@
       }
     }
     function confirmPayoutWallet(address) {
-      const message = `Set your payout wallet to:\n\n${address}\n\nConfirm this is YOUR testnet wallet.`;
+      const message = `Set your payout wallet to:\n\n${address}\n\nConfirm this is YOUR ${networkLabel().toLowerCase()} wallet.`;
       if (tg?.showPopup) {
         return new Promise((resolve) => {
           tg.showPopup({
@@ -638,9 +642,9 @@
               <div class="mt-1 flex gap-2"><code id="deposit-address" class="min-w-0 flex-1 break-all rounded-lg bg-ink p-2 text-xs">${escapeHtml(instructions.deposit_address)}</code><button class="copy-payment-value rounded-lg border border-line px-3 text-xs text-mint" data-copy-target="deposit-address">Copy</button></div>
               <p class="mt-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Transaction comment · required</p>
               <div class="mt-1 flex gap-2"><code id="deposit-memo" class="min-w-0 flex-1 break-all rounded-lg bg-ink p-2 text-xs">${escapeHtml(instructions.memo)}</code><button class="copy-payment-value rounded-lg border border-line px-3 text-xs text-mint" data-copy-target="deposit-memo">Copy</button></div>
-              <p id="ton-wallet-status" class="mt-3 text-center text-xs text-slate-500">Connect a TON wallet to pay on Testnet.</p>
+              <p id="ton-wallet-status" class="mt-3 text-center text-xs text-slate-500">Connect a TON wallet to pay on ${networkLabel()}.</p>
               <button id="send-ton-payment" class="mt-3 w-full rounded-xl bg-mint px-4 py-3 text-sm font-bold text-ink transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40" type="button" disabled>Pay with TON Connect</button>
-            ` : '<p class="mt-4 rounded-xl border border-amber-200/20 bg-amber-200/5 p-3 text-xs leading-5 text-amber-100">TON deposits are not configured. Set the testnet wallet and TON API credentials before sending funds.</p>'}
+            ` : `<p class="mt-4 rounded-xl border border-amber-200/20 bg-amber-200/5 p-3 text-xs leading-5 text-amber-100">TON deposits are not configured. Set the ${networkLabel().toLowerCase()} wallet and TON API credentials before sending funds.</p>`}
           </div>
           <p id="payment-status" class="mt-4 text-center text-xs text-slate-500">Waiting for authenticated chain confirmation.</p>
           <button id="check-payment-status" class="mt-3 w-full rounded-xl border border-line px-4 py-3 text-sm font-semibold text-slate-300 hover:border-mint/40">Check payment status</button>`;
@@ -657,12 +661,12 @@
       const intent = state.activePaymentIntent;
       const button = $("send-ton-payment");
       const instructions = intent?.crypto || {};
-      if (!intent || !tonConnectUI?.connected || state.tonWallet?.account?.chain !== "-3") {
-        toast("Connect a wallet on TON Testnet first.");
+      if (!intent || !tonConnectUI?.connected || !isCorrectChain(state.tonWallet?.account?.chain)) {
+        toast(`Connect a wallet on TON ${networkLabel()} first.`);
         return;
       }
       if (!instructions.deposit_address || !instructions.memo) {
-        toast("TON Testnet payment details are unavailable.");
+        toast(`TON ${networkLabel()} payment details are unavailable.`);
         return;
       }
       button.disabled = true;
@@ -675,7 +679,7 @@
           .toBoc()
           .toString("base64");
         const result = await tonConnectUI.sendTransaction({
-          network: "-3",
+          network: appChain(),
           validUntil: Math.floor(Date.now() / 1000) + 600,
           messages: [{
             address: instructions.deposit_address,
@@ -684,13 +688,13 @@
           }]
         });
         state.submittedTransactionBoc = result.boc;
-        $("payment-status").textContent = "Transfer submitted. Checking TON Testnet for the confirmed transaction…";
+        $("payment-status").textContent = `Transfer submitted. Checking TON ${networkLabel()} for the confirmed transaction…`;
         await pollPaymentIntent(true);
       } catch (error) {
         $("payment-status").textContent = error.message || "TON transfer was not submitted.";
         toast(error.message || "TON transfer was not submitted.");
       } finally {
-        if ($("send-ton-payment")) $("send-ton-payment").disabled = !state.tonWallet || state.tonWallet.account.chain !== "-3";
+        if ($("send-ton-payment")) $("send-ton-payment").disabled = !state.tonWallet || !isCorrectChain(state.tonWallet.account.chain);
       }
     }
     async function pollPaymentIntent(showErrors) {
@@ -735,6 +739,7 @@
     async function loadPricing() {
       state.pricing = await api("/api/pricing");
       if (state.dashboard) renderSlots(state.dashboard.slots);
+      updateTonConnectStatus(state.tonWallet);
       renderRoute();
     }
     function getServerCatalog() {

@@ -10,7 +10,7 @@ from config import (
     TON_API_KEY,
     TON_DEPOSIT_ADDRESS,
     TON_NETWORK,
-    TON_TESTNET_PAYOUTS_ENABLED,
+    TON_PAYOUTS_ENABLED,
 )
 from models import WithdrawalRequest
 
@@ -100,13 +100,11 @@ class UnconfiguredPayoutAdapter:
 
 
 def get_payout_adapter() -> PayoutAdapter:
-    if TON_TESTNET_PAYOUTS_ENABLED:
+    if TON_PAYOUTS_ENABLED:
         if ALLOW_DEMO_PAYMENTS:
             raise RuntimeError(
-                "Disable ALLOW_DEMO_PAYMENTS before enabling testnet TON payouts"
+                "Disable ALLOW_DEMO_PAYMENTS before enabling live TON payouts"
             )
-        if TON_NETWORK != "testnet":
-            raise RuntimeError("TON payouts are restricted to TON_NETWORK=testnet")
         if not all(
             (
                 TON_API_ENDPOINT,
@@ -116,9 +114,9 @@ def get_payout_adapter() -> PayoutAdapter:
             )
         ):
             raise RuntimeError(
-                "Testnet TON payouts require the configured RPC, key, mnemonic, and wallet address"
+                "Live TON payouts require the configured RPC, key, mnemonic, and wallet address"
             )
-        from payments.ton_payout import TonTestnetPayoutAdapter
+        from payments.ton_payout import TonPayoutAdapter
 
-        return TonTestnetPayoutAdapter()
+        return TonPayoutAdapter()
     return SimulatedPayoutAdapter() if ALLOW_DEMO_PAYMENTS else UnconfiguredPayoutAdapter()

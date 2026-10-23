@@ -49,7 +49,9 @@ async function main() {
   if (!endpoint || !apiKey || !mnemonic?.length || !configuredAddress) {
     fail("TON_API_ENDPOINT, TON_API_KEY, APP_WALLET_MNEMONIC, and TON_DEPOSIT_ADDRESS are required");
   }
-  if (network !== "testnet") fail("TON transaction scanning is restricted to TON_NETWORK=testnet");
+  const isTestnet = network === "testnet";
+  const isMainnet = network === "mainnet";
+  if (!isTestnet && !isMainnet) fail("TON_NETWORK must be 'testnet' or 'mainnet'");
 
   // Resolve the v3 REST endpoint. Prefer an explicit override; otherwise derive it
   // from the v2 endpoint (https://<host>/api/v2/jsonRPC -> https://<host>/api/v3).
@@ -73,8 +75,14 @@ async function main() {
   const isTestnetHost = host
     .split(".")
     .some((label) => label === "testnet" || label.startsWith("testnet-"));
-  if (endpointUrl.protocol !== "https:" || !isTestnetHost) {
-    fail("TON API endpoint must be an HTTPS testnet endpoint");
+  if (endpointUrl.protocol !== "https:") {
+    fail("TON API endpoint must be HTTPS");
+  }
+  if (isTestnet && !isTestnetHost) {
+    fail("TON_NETWORK=testnet requires a testnet RPC endpoint");
+  }
+  if (isMainnet && isTestnetHost) {
+    fail("TON_NETWORK=mainnet requires a mainnet RPC endpoint");
   }
 
   if (!Number.isSafeInteger(since) || since < 0) fail("Transaction scan start time is invalid");
@@ -85,7 +93,7 @@ async function main() {
     workchain: 0,
     publicKey: keyPair.publicKey,
     walletId: {
-      networkGlobalId: -3,
+      networkGlobalId: isTestnet ? -3 : -239,
       context: { walletVersion: "v5r1", workchain: 0, subwalletNumber: 0 },
     },
   });
@@ -96,7 +104,7 @@ async function main() {
     fail("TON_DEPOSIT_ADDRESS is invalid");
   }
   if (!expectedAddress.equals(wallet.address)) {
-    fail("TON_DEPOSIT_ADDRESS does not match the testnet Wallet V5R1 derived from APP_WALLET_MNEMONIC");
+    fail("TON_DEPOSIT_ADDRESS does not match the Wallet V5R1 derived from APP_WALLET_MNEMONIC");
   }
 
   const account = wallet.address.toRawString();

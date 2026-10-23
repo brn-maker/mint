@@ -27,6 +27,7 @@ from config import (
     AUTO_CREATE_SCHEMA,
     ENABLE_BACKGROUND_WORKERS,
     TELEGRAM_BOT_TOKEN,
+    TON_CHAIN,
     TON_NETWORK,
 )
 from database import Base, engine, get_db
@@ -62,7 +63,11 @@ from pricing import public_server_listings
 from referrals import build_referral_link, generate_user_referral_code
 from rate_limit import rate_limit_sensitive
 from telegram_auth import TelegramAuthError, validate_telegram_init_data
-from wallet_validation import is_mainnet_ton_address, is_plausible_payout_address
+from wallet_validation import (
+    is_mainnet_ton_address,
+    is_plausible_payout_address,
+    is_testnet_ton_address,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -483,7 +488,12 @@ async def dashboard(
 
 @app.get("/api/pricing")
 async def pricing() -> dict[str, object]:
-    return {"servers": public_server_listings(), "currency": "TON"}
+    return {
+        "servers": public_server_listings(),
+        "currency": "TON",
+        "network": TON_NETWORK,
+        "chain": TON_CHAIN,
+    }
 
 
 def _validate_payout_address(address: str) -> None:
@@ -491,6 +501,8 @@ def _validate_payout_address(address: str) -> None:
         raise HTTPException(status_code=422, detail="Enter a valid TON wallet address")
     if TON_NETWORK == "testnet" and is_mainnet_ton_address(address):
         raise HTTPException(status_code=422, detail="Use a TON testnet wallet address")
+    if TON_NETWORK == "mainnet" and is_testnet_ton_address(address):
+        raise HTTPException(status_code=422, detail="Use a TON mainnet wallet address")
 
 
 @app.post("/api/register")
@@ -603,8 +615,7 @@ async def wallet_proof_verify(
         raise HTTPException(status_code=400, detail=str(result.get("error", "Invalid proof")))
     user = await _get_or_create_user(db, user_id)
     verified_address = str(result["address"])
-    if TON_NETWORK == "testnet" and is_mainnet_ton_address(verified_address):
-        raise HTTPException(status_code=422, detail="Use a TON testnet wallet address")
+    _validate_payout_address(verified_address)
     user.wallet_address = verified_address
     await db.commit()
     return {"verified": True, "wallet_address": verified_address}
