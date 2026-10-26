@@ -16,12 +16,14 @@ async def verify_ton_proof(
     public_key: str,
     proof: dict[str, Any],
     expected_domain: str,
+    network: str,
 ) -> dict[str, Any]:
     payload = {
         "address": address,
         "public_key": public_key,
         "proof": proof,
         "expected_domain": expected_domain,
+        "network": network,
     }
     try:
         process = await asyncio.create_subprocess_exec(

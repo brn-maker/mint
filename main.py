@@ -618,6 +618,7 @@ async def wallet_proof_verify(
             public_key=body.public_key,
             proof=proof,
             expected_domain=body.domain,
+            network=body.network,
         )
     except TonProofError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

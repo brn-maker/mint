@@ -1,6 +1,6 @@
 import { Address } from "@ton/core";
 import { sha256, signVerify } from "@ton/crypto";
-import { TonClient } from "@ton/ton";
+import { TonClient, WalletContractV4, WalletContractV5R1 } from "@ton/ton";
 import { stdin } from "node:process";
 
 const PROOF_PREFIX = "ton-proof-item-v2/";
@@ -16,6 +16,20 @@ async function readInput() {
   let input = "";
   for await (const chunk of stdin) input += chunk;
   return JSON.parse(input);
+}
+
+function deriveAddresses(publicKey, workchain, networkGlobalId) {
+  // Try the standard wallet versions: V5R1 (modern wallets incl. Telegram) and V4R2.
+  const v5r1 = WalletContractV5R1.create({
+    workchain,
+    publicKey,
+    walletId: {
+      networkGlobalId,
+      context: { walletVersion: "v5r1", workchain, subwalletNumber: 0 },
+    },
+  });
+  const v4 = WalletContractV4.create({ workchain, publicKey });
+  return [v5r1.address, v4.address];
 }
 
 async function getOnChainPublicKey(address) {
@@ -123,14 +137,22 @@ async function main() {
     fail("Invalid proof signature");
   }
 
-  // Bind the public key to the address via the on-chain get_public_key method.
-  let onChainKey;
-  try {
-    onChainKey = await getOnChainPublicKey(address);
-  } catch {
-    fail("Could not fetch the on-chain public key for the wallet");
+  // Bind the public key to the address. Prefer deriving the address from the
+  // public key (works even for undeployed wallets); fall back to the on-chain
+  // get_public_key method for non-standard wallet versions.
+  const network = input?.network || "-239";
+  const networkGlobalId = Number(network);
+  let keyMatchesAddress = deriveAddresses(publicKey, address.workChain, networkGlobalId)
+    .some((candidate) => candidate.equals(address));
+  if (!keyMatchesAddress) {
+    try {
+      const onChainKey = await getOnChainPublicKey(address);
+      keyMatchesAddress = onChainKey.toLowerCase() === publicKeyHex.toLowerCase();
+    } catch {
+      keyMatchesAddress = false;
+    }
   }
-  if (onChainKey.toLowerCase() !== publicKeyHex.toLowerCase()) {
+  if (!keyMatchesAddress) {
     fail("Public key does not match the wallet address");
   }
 
