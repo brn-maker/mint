@@ -178,6 +178,17 @@
           <div id="ledger-empty" class="px-4 py-8 text-center text-sm text-slate-500">No transactions yet.</div>
         </div>
       </section>
+
+      <section class="mb-8 rounded-2xl border border-line bg-panel/70 p-5">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Customer care</p>
+            <h2 class="mt-1 text-lg font-semibold">Need help?</h2>
+            <p class="mt-2 text-sm leading-6 text-slate-400">Questions about deposits, withdrawals, or referrals? Reach our support team on Telegram.</p>
+          </div>
+          <button id="support-button" class="shrink-0 rounded-xl border border-mint/30 bg-mint/10 px-4 py-2.5 text-sm font-bold text-mint transition hover:bg-mint/20">Contact @mintcustomercare</button>
+        </div>
+      </section>
     </main>
 
     <main id="server-catalog-view" class="hidden">
@@ -781,6 +792,14 @@
       setTimeout(() => $("copy-status").textContent = "", 2200);
     });
     $("browse-servers").addEventListener("click", () => navigate("/servers"));
+    $("support-button")?.addEventListener("click", () => {
+      const supportLink = "https://t.me/mintcustomercare";
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(supportLink);
+      } else {
+        window.open(supportLink, "_blank");
+      }
+    });
     document.addEventListener("click", (event) => {
       const copyPayment = event.target.closest("[data-copy-target]");
       if (copyPayment) {
