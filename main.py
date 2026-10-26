@@ -3,6 +3,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import logging
 import os
 import random
@@ -16,7 +17,7 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
@@ -235,12 +236,24 @@ async def _get_or_create_user(
     )
 
 
-@app.get("/")
-async def dashboard_page() -> FileResponse:
-    return FileResponse(
-        FRONTEND_FILE,
+def _render_frontend() -> HTMLResponse:
+    injection = (
+        "<script>"
+        f"window.__TON_NETWORK__={json.dumps(TON_NETWORK)};"
+        f"window.__TON_CHAIN__={json.dumps(TON_CHAIN)};"
+        "</script>"
+    )
+    html = FRONTEND_FILE.read_text()
+    html = html.replace("</head>", injection + "</head>", 1)
+    return HTMLResponse(
+        html,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
+
+
+@app.get("/")
+async def dashboard_page() -> HTMLResponse:
+    return _render_frontend()
 
 
 @app.get("/tonconnect-manifest.json")
@@ -260,11 +273,8 @@ async def healthz() -> dict[str, str]:
 
 @app.get("/servers")
 @app.get("/servers/{server_path:path}")
-async def server_catalog_page(server_path: str = "") -> FileResponse:
-    return FileResponse(
-        FRONTEND_FILE,
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+async def server_catalog_page(server_path: str = "") -> HTMLResponse:
+    return _render_frontend()
 
 
 @app.get("/api/dashboard")

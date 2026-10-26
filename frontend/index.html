@@ -262,8 +262,8 @@
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     })[char]);
     const number = (value, max = 4) => Number(value).toLocaleString(undefined, { maximumFractionDigits: max });
-    const appNetwork = () => state.pricing?.network || "testnet";
-    const appChain = () => state.pricing?.chain || "-3";
+    const appNetwork = () => window.__TON_NETWORK__ || state.pricing?.network || "testnet";
+    const appChain = () => window.__TON_CHAIN__ || state.pricing?.chain || "-3";
     const networkLabel = () => (appNetwork() === "mainnet" ? "Mainnet" : "Testnet");
     const isCorrectChain = (chain) => chain === appChain();
     function updateTonConnectStatus(wallet) {

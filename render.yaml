@@ -32,7 +32,7 @@ services:
       - key: TON_DEPOSIT_ADDRESS
         sync: false
       - key: TON_NETWORK
-        value: testnet
+        sync: false
       - key: TON_API_ENDPOINT
         sync: false
       - key: TON_API_KEY
@@ -40,4 +40,4 @@ services:
       - key: APP_WALLET_MNEMONIC
         sync: false
       - key: TON_PAYOUTS_ENABLED
-        value: "false"
+        sync: false
